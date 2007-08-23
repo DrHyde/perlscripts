@@ -165,3 +165,13 @@ This is too complicated and has a couple of nasty little security holes on a mul
 =head2 How to contribute
 
 I have created a mailing list to which I invite anyone interested in using or hacking on the scripts to subscribe.  It is E<lt>drhyde-news2mail@lists.sourceforge.netE<gt> and is managed using mailman.  You can subscribe at L<https://lists.sourceforge.net/lists/listinfo/dhyde-news2mail>.
+
+=head1 AUTHOR, COPYRIGHT and LICENCE
+
+Copyright 2007 David Cantrell E<lt>david@cantrell.org.ukE<gt>
+
+The news2mail and mail2news scripts are licenced under the same terms as perl itself.
+
+This documentation may be used and distributed by anyone but may not be modified without permission from the author.
+
+=cut
