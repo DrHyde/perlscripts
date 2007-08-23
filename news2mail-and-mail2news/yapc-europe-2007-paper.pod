@@ -1,0 +1,167 @@
+=head1 news2mail and mail2news - a Usenet/Email gateway
+
+=head2 Abstract
+
+Usenet has a bad reputation for being full of spam and idiots, but this is no longer really justified. Most of the spam is dealt with by automatic cancelbots before normal people ever get to see it, and the current crop of idiots don't know about Usenet anyway because as far as they're concerned, if it isn't Teh Web then it doesn't exist. So the only thing that sucks about Usenet these days is the dreadful client software.
+
+With a good client, Usenet becomes a great place to discuss any topic and make friends.  That's why I wrote news2mail and its companion mail2news. They are perl scripts which speak sufficient subsets of NNTP and SMTP to make Usenet available in your mail client and enable posting to Usenet as if it were a mailing list.
+
+=head2 Where to get the software
+
+L<http://drhyde.cvs.sourceforge.net/drhyde/perlscripts/news2mail-and-mail2news/>
+
+=head2 Other implementations
+
+There are *lots* of other implementations of this idea.  However, all the ones I looked at when I needed it had one big flaw - they assumed that you were running your own local news server and so could read and write messages directly from and to the news spool.  Worse, many of them assumed that you were running INN.  I not only don't run my own news server, but if I did, INN would be a serious case of overkill for my own personal use.
+
+So I did what any hacker would do, and wrote my own version.
+
+=head2 Message formats
+
+These two scripts are, effectively, a bit of glue sticking two different protocols together.  Both SMTP and NNTP are concerned with transferring text messages from one place to another, and the message formats are nigh-on identical.  Here's a typical email, which I received from a mailing list:
+
+  Return-path: <cctech-bounces@classiccmp.org>
+  Envelope-to: david@cantrell.org.uk
+  Delivery-date: Fri, 17 Aug 2007 14:15:32 +0100
+  Received: from dewey.classiccmp.org ([209.145.140.57])
+    by bytemark.barnyard.co.uk with esmtp (Exim 3.35 #1)
+    id 1IM1fo-0006tf-00
+    for david@cantrell.org.uk; Fri, 17 Aug 2007 14:15:32 +0100
+  [ several other Received headers cut out ]
+  Date: Fri, 17 Aug 2007 11:23:04 +0100
+  From: David Cantrell <david@cantrell.org.uk>
+  To: "General Discussion: On-Topic Posts Only" <cctech@classiccmp.org>
+  Message-ID: <20070817102303.GA31679@bytemark.barnyard.co.uk>
+  X-Sepdate: Fri Sep 5099 10:27:25 BST 1993                  
+  References: <200708140955.50011.mark@wickensonline.co.uk>
+  Mime-Version: 1.0
+  Content-Type: text/plain; charset=us-ascii
+  Content-Disposition: inline
+  In-Reply-To: <200708140955.50011.mark@wickensonline.co.uk>
+  User-Agent: Mutt/1.5.9i
+  Subject: Re: UK retro show evening
+  Precedence: list
+  Reply-To: "General Discussion: On-Topic Posts Only" <cctech@classiccmp.org>
+  Sender: cctech-bounces@classiccmp.org
+
+  On Tue, Aug 14, 2007 at 09:55:49AM +0100, Mark Wickens wrote:
+
+  > I'm thinking 'start small' here. Maybe an event with 30 or so
+  > participants? Primarily to 'chew-the-cud'?
+
+  How about "come to the pub and natter".
+  I propose the evening of Thursday the 6th of September, at whatever
+  venue the London Perl Mongers choose for their social ...
+
+and here's a typical Usenet posting:
+
+  Path: g2news2.google.com!postnews.google.com!...
+  From:  roberthar...@my-deja.com
+  Newsgroups: alt.2eggs.sausage.beans.tomatoes.2toast.largetea.cheerslove
+  Subject: Re: black Pudding
+  Date: Wed, 22 Aug 2007 17:15:13 -0700
+  Organization: http://groups.google.com
+  Lines: 20
+  Message-ID: <1187828113.562214.100540@m37g2000prh.googlegroups.com>
+  References: <46CC4CFA.2A57EE2B@yahoo.com>
+  NNTP-Posting-Host: 195.137.63.170
+  Mime-Version: 1.0
+  Content-Type: text/plain; charset="us-ascii"
+  X-Complaints-To: groups-abuse@google.com
+  NNTP-Posting-Date: Thu, 23 Aug 2007 00:15:14 +0000 (UTC)
+  In-Reply-To: <46CC4CFA.2A57EE2B@yahoo.com>
+  User-Agent: G2/1.0
+  X-HTTP-UserAgent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.8.1.6) Gecko/20061201 Firefox/2.0.0.6 (Ubuntu-feisty),gzip(gfe),gzip(gfe)
+
+  On 22 Aug, 15:49, Reverend Hoovie <reverendhoo...@yahoo.com> wrote:
+
+  > Did a google on black pudding and must admit it sounds quite tasty.
+
+  I love black pudding, except as served in hotel help-yersel buffets.
+  ...
+
+Both are basically the same format with just a few very minor changes.  Both have From, Date, Subject and Message-ID headers, for example.  The email's To header is replaced with usenet's Newsgroups header, and email uses multiple Received headers to show how a message got to you where Usenet instead uses a single Path header.
+
+This makes the task of translating between the two systems very easy.
+
+=head2 From Usenet to email
+
+The news2mail script is designed to be run periodically from a cron job, and to store all its configuration and state information under your home directory.  It uses Net::NNTP::Client to talk to any number of news servers, retrieving different newsgroups from each one - this means that you can use it to retrieve public postings from public servers, as well as private groups run by your university or company.
+
+For each message that it retrieves it does a few simple edits to the headers before using Email::Send to forward it to whatever address you choose using SMTP.  Those edits are:
+
+=over
+
+=item Insert a To header
+
+=item Insert a Reply-To header
+
+This will be either the address that you have configured for the mail2news script to use for posting, or if you've not configured posting to the group that this message came from it will be 'dave.null'.
+
+=item Insert an X-Newsgroup header
+
+So that you can see where it came from, and more importantly so that procmail can see it as well and filter your mail into folders.
+
+=item Path is translated to Received
+
+The Path header is turned into "Received: from [hostname] with NNTP path ..." which is not strictly legal, but it works.  Google do something similarly illegal with Received headers emited by gmail, so I reckon I'm in good company.
+
+=item References header is turned into In-Reply-To
+
+Although you do see emails with References headers, In-Reply-To seems to be more widely implemented.
+
+=back
+
+Date, Message-Id, Subject and From are passed through unchanged, and anything else is turned into an X-NNTP-Header-$foo header.
+
+The message is then passed to Email::Send, and ends up in your mailbox.  It then updates a cache of message-ids that it has seen, in case a server burps and re-sends stuff (which happens occasionally, and also eliminates cross-posts) and goes on to the next message.
+
+Finally, anything that's been in the cache for more than a year is deleted.
+
+=head2 From Email to Usenet
+
+Going in the opposite direction, from email to Usenet, is just as simple.  The mail2news script is meant to be invoked by the mail server, and is handed an email on STDIN, with the newsgroup name on the command line.  Again, a few headers are edited - we add a Newsgroups header so that the news server will know which group we're posting to, drop the Date, To and Received headers, and then insert a Date header again.  The shenanigans with dropping and then adding a date header are to work around a problem with some mail clients setting incorrectly formatted dates, which then confuse the news server.
+
+It reads a configuration file which tells it which servers to use for posting to which groups, and logs in to each appropriate server in turn, using a username and password if necessary.  Provided that the server confirms that yes, you can post to it, the article is sent on its way.
+
+=head2 Configuration
+
+=head3 news2mail
+
+news2mail looks in $HOME/.news2mail for several items.  The most important of those is config.pl, which looks like this:
+
+  'username:password@server.example.com:portnumber' => {
+     'comp.lang.perl.misc' =>
+         { post => 'clpm-post@example.com' },
+     'alt.2eggs.sausage.beans.tomatoes.2toast.largetea.cheerslove' =>
+         { post => '2eggs-post@example.com' }
+  },
+  'news.somewhereelse.wherever' => {
+      'local.fart-jokes' => { post => 0 }
+  }
+
+which is a simple hash where keys are servers to query.  Their associated values are hashes whose keys are group names.  *Their* values are again hashes, which currently have a single key 'post' whose value is either 0, meaning that you can't post, or the email address for sending articles to the group.
+
+The other items in that directory will be created by news2mail, and are the cache of previously seen message-ids, and the number of the last message we saw in each group, which makes startup next time quicker.  If that number doesn't exist (ie we've just subscribed to a group) then it is set to the last message in the group, to avoid downloading *everything* the first time.  You really don't want to do that, as some servers store several hundred days worth of messages and your mail server wouldn't like that.
+
+=head3 mail2news
+
+Configuring mail2news is a bit more complicated.  First, you'll need to create a /etc/mail2newsrc file like this:
+
+  'username:password@server.example.com:portnumber' => {
+     'comp.lang.perl.misc' => 1,
+     'alt.2eggs.sausage.beans.tomatoes.2toast.largetea.cheerslove' => 1
+  }
+
+which lists all the servers that we can post to, and for each of them the groups that we can post to.  Note that this applies to all mail2news users on this system.
+
+Then you will need to configure your mail server to accept mail for the appropriate addresses, and tell it what to do with 'em.  The easiest way is to drop some entries in the /etc/aliases file:
+
+  clpm-post:  "|/usr/local/bin/mail2news comp.lang.perl.misc"
+  2eggs-post: "|/usr/local/bin/mail2news alt.2eggs.sausage.beans.tomatoes.2toast.largetea.cheerslove"
+
+This is too complicated and has a couple of nasty little security holes on a multi-user system, but I wrote the software for my own use where they're not an issue.
+
+=head2 How to contribute
+
+I have created a mailing list to which I invite anyone interested in using or hacking on the scripts to subscribe.  It is E<lt>drhyde-news2mail@lists.sourceforge.netE<gt> and is managed using mailman.  You can subscribe at L<https://lists.sourceforge.net/lists/listinfo/dhyde-news2mail>.
