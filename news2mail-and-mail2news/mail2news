@@ -1,0 +1,58 @@
+#!/usr/local/bin/perl
+
+use warnings;
+use strict;
+
+use Data::Dumper;
+use Net::NNTP;
+use News::Article;
+
+use constant DEBUG => 0;
+
+select(STDERR); $| = 1; select(STDOUT);
+
+die("mail2news hasn't been configured.\n") unless(-r '/etc/mail2newsrc');
+
+my $subs = { do '/etc/mail2newsrc' };
+
+my $group = shift;
+die("mail2news must be told what group to post to\n") unless($group);
+
+my $article = News::Article->new();
+$article->read(\*STDIN);
+$article->set_headers(Newsgroups => $group);
+$article->drop_headers(qw(date to received));
+$article->add_date();
+
+my $posted_ok = 0;
+foreach my $server (grep { $subs->{$_}->{$group} } keys %{$subs}) {
+    my($auth, $host) = split('@', $server);
+    ($auth, $host) = (':', $auth) if(!$host);
+    my($user, $pass) = split(':', $auth);
+    ($host, my $port) = split(':', $host);
+    $port ||= 119;
+
+    my $client = Net::NNTP->new($host, Port => $port);
+    $client->authinfo($user => $pass) if($user);
+
+    unless($client->postok()) {
+        print STDERR "mail2news configured to post to $group via\n".
+	   "$server, but it didn't say we can post.  Bother and damnation!\n";
+	next;
+    }
+	
+    eval { $article->post($client); };
+    die("Error in posting to $server: $@\n") if($@);
+    $posted_ok++;
+}
+
+if(!$posted_ok) {
+    die "mail2news couldn't post to $group on any configured server.\n\n".
+        "Your message read:\n\n".
+        join("\n\n",
+            join("\n", $article->headers()),
+            join("\n", $article->body())
+        )."\n\n".
+	"And the environment was:\n\n".
+	join("\n", map { join(":\t", $_, $ENV{$_}) } sort keys %ENV);
+}
