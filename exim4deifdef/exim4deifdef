@@ -35,6 +35,7 @@ LINE: while(my $line_orig = <$fh>) {
         $eval .= "print qq[$line_orig];print \"\\n\";\n";
     }
 }
-# print "$eval;\n\n\n__DATA__\n";
+open(TMP, ">/tmp/exim4deifdef.code");
+print TMP "$eval";
 eval($eval);
 die($@) if($@);
