@@ -7,42 +7,36 @@ my $config_file = shift || die("Usage: $0 config_file\n");
 
 my %macros = ();
 my @ifstack = ();
+my $eval = '';
 
 open(my $fh, $config_file) || die("Can't read $config_file: $!\n");
-# LINE: while(my $line_orig = <$fh>) {
-LINE: while(my $line_orig = <DATA>) {
+LINE: while(my $line_orig = <$fh>) {
+    chomp($line_orig);
+    $line_orig =~ s/\\/\\\\/g;
+    $line_orig =~ s/\$/\\\$/g;
+    $line_orig =~ s/@/\\@/g;
     (my $line = $line_orig) =~ s/^\s+|\s+$//g;
+    # print "$line_orig";
 
-    if($line =~ /^\./) {
-    }
-    # next LINE if
-
+    if($line =~ /^\.(\w+)(?:\s+(\w+))?/ && $1 ne 'include') {
+        my($cmd, $var) = ($1, $2);
+        $cmd eq 'ifdef'  ? $eval .= "if(exists(\$macros{$var})) {\n" :
+        $cmd eq 'ifndef' ? $eval .= "if(!exists(\$macros{$var})) {\n" :
+        $cmd eq 'else'   ? $eval .= "} else {\n" :
+        $cmd eq 'endif'  ? $eval .= "}\n" :
+            die("I don't recognise .$cmd in\n$line_orig\n");
+        next LINE
     # assume a capital letter at start of line introduces a macro
-    if($line =~ /^([A-Z]\w*)\s*=\s*(.*)$/) {
-        $macros{$1} = $2;
-        print "#$line_orig";
-        next LINE;
+    } elsif($line =~ /^([A-Z]\w*)\s*=\s*(.*)$/) {
+        my($name, $value) = ($1, $2);
+        $value =~ s/([A-Z]\w*)/\$macros{$1}/g;
+        $eval .= "\$macros{$name} = qq[$value];\n";
     } else {
-        $line_orig =~ s/$_/$macros{$_}/g foreach(keys %macros);
-        print $line_orig;
+        $line_orig =~ s/([A-Z]\w*)/\$macros{$1}/g;
+        $eval .= "print qq[$line_orig];print \"\\n\";\n";
     }
 }
-__DATA__
-.ifndef CONFDIR
-  CONFDIR = /etc/exim4
-  .ifdef HLAGH
-    hlagh
-  .else
-    nothlagh
-  .endif
-.endif
-confdir = CONFDIR
-HLAGH=moo
-.ifndef FOO
-  .ifdef HLAGH
-    hlagh
-  .else
-    nothlagh
-  .endif
-.endif
-
+print "$eval;\n\n\n__DATA__\n";
+eval($eval);
+die($@) if($@);
+print Dumper(\%macros);
