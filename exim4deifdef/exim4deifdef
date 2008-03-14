@@ -1,0 +1,48 @@
+#!perl
+
+use strict;
+use warnings;
+
+my $config_file = shift || die("Usage: $0 config_file\n");
+
+my %macros = ();
+my @ifstack = ();
+
+open(my $fh, $config_file) || die("Can't read $config_file: $!\n");
+# LINE: while(my $line_orig = <$fh>) {
+LINE: while(my $line_orig = <DATA>) {
+    (my $line = $line_orig) =~ s/^\s+|\s+$//g;
+
+    if($line =~ /^\./) {
+    }
+    # next LINE if
+
+    # assume a capital letter at start of line introduces a macro
+    if($line =~ /^([A-Z]\w*)\s*=\s*(.*)$/) {
+        $macros{$1} = $2;
+        print "#$line_orig";
+        next LINE;
+    } else {
+        $line_orig =~ s/$_/$macros{$_}/g foreach(keys %macros);
+        print $line_orig;
+    }
+}
+__DATA__
+.ifndef CONFDIR
+  CONFDIR = /etc/exim4
+  .ifdef HLAGH
+    hlagh
+  .else
+    nothlagh
+  .endif
+.endif
+confdir = CONFDIR
+HLAGH=moo
+.ifndef FOO
+  .ifdef HLAGH
+    hlagh
+  .else
+    nothlagh
+  .endif
+.endif
+
