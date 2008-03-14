@@ -6,7 +6,6 @@ use warnings;
 my $config_file = shift || die("Usage: $0 config_file\n");
 
 my %macros = ();
-my @ifstack = ();
 my $eval = '';
 
 open(my $fh, $config_file) || die("Can't read $config_file: $!\n");
