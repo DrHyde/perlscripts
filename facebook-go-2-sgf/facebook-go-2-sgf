@@ -4,7 +4,6 @@ use strict;
 use warnings;
 
 use LWP::Simple;
-use Games::Goban;
 
 my $game = shift;
 
@@ -24,5 +23,57 @@ my @web = split(
 );
 
 my $handicap = (grep { /new goMove.*HANDICAP/ } @web)[0];
-my $last = (grep { /new goMove/ } @web)[-3]; # back three to skip dead stone marking
+# moves[1] = new goMove(1,'B','HANDICAP','15_3,3_15,15_15,3_3','','','');
 
+# (
+# ;FF[4]
+#  GM[1]
+#  CA[ISO-8859-1]
+#  AP[Goban:3.2.7]
+#  US[David Cantrell]
+#  SZ[19]
+#  HA[3]
+#  KM[0.5]
+#  AB[dp][pd][pp]
+#  RE[W+3.5]
+#  GN[epsom 2008 r3]
+#  PB[pauline bailey]
+#  BR[16k?]
+#  PW[me]
+#  WR[13k]
+#  DT[2008-07-19]
+# ;W[cd];B[jd];W[cn];B[fp];W[en];B[di];W[cj];B[cf];W[ci];B[dj];W[df]
+# ;B[dg];W[de];B[ck];W[dk];B[ek];W[dl];B[bk];W[bj];B[ch];W[bh];B[bg]
+# ;W[el];B[fk];W[fl];B[eg];W[ge];B[pj];W[qf];B[nd];W[qc];B[qd];W[rd]
+# ;B[pc];W[qb];B[pb];W[qe];B[gg];W[ic];B[jc];W[id];B[ie];W[he];B[if]
+# ;W[cq];B[cp];W[bp];B[dq];W[cr];B[dr];W[co];B[eo];W[gn];B[hp];W[nq]
+# ;B[lq];W[no];B[pn];W[pq];B[jo];W[gk];B[fi];W[ln];B[lp];W[nm];B[pl]
+# ;W[qp];B[qo];W[rp];B[op];W[oq];B[np];W[nj];B[of];W[qi];B[pi];W[qj]
+# ;B[qk];W[rk];B[rl];W[sj];B[qh];W[rh];B[qg];W[rg];B[pg];W[jn];B[io]
+# ;W[in];B[mo];W[jj];B[ii];W[ij];B[ji];W[ki];B[kh];W[lh];B[li];W[kj]
+# ;B[mi];W[lg];B[kg];W[nh];B[ni];W[oi];B[oh];W[oj];B[mh];W[lj];B[ng]
+# ;W[hi];B[gj];W[hj];B[ih];W[hh];B[hg];W[be];B[bf];W[fo];B[go];W[fn]
+# ;B[hn];W[hm];B[ho];W[rm];B[qm];W[rn];B[ro];W[sl];B[ql];W[so];B[nn]
+# ;W[mn];B[on];W[ol];B[mj];W[mk];B[mq];W[mr];B[lr];W[ns];B[ls];W[ko]
+# ;B[kp];W[jb];B[kb];W[ja];B[ka];W[ib];B[fe];W[fd];B[ef];W[ee];B[ff]
+# ;W[kc];B[lc];W[kd];B[lb];W[je];B[lf];W[le];B[me];W[kf];B[mg];W[ld]
+# ;B[md];W[gi];B[fj];W[af];B[ah];W[bl];B[bi];W[cl];B[aj];W[ds];B[es]
+# ;W[cs];B[fr];W[do];B[ce];W[bc];B[dd];W[ed];B[dc];W[cc];B[cb];W[db]
+# ;B[eb];W[ec];B[ad];W[bd];B[jf];W[ke];B[ok];W[nk];B[pk];W[qr];B[om]
+# ;W[nl];B[al];W[am];B[ak];W[qn];B[po];W[lo];B[mp];W[pe];B[mm];W[lm]
+# ;B[lk];W[ml];B[ll];W[kl];B[mm];W[pa];B[oa];W[qa];B[nb];W[oe];B[ne]
+# ;W[od];B[oc];W[kk];B[re];W[rc];B[rf];W[se];B[pf];W[sf];B[ms];W[nr]
+# ;B[km];W[kn];B[jm];W[im];B[gf];W[hf];B[gh];W[ep];B[eq];W[eo];B[gq]
+# ;W[ae];B[bo];W[ap];B[bm];W[bn];B[an];W[cm];B[am];W[ao];B[bq];W[br]
+# ;B[jl];W[il];B[ag];W[ml];B[mk];W[nm];B[nl];W[mm];B[];
+#  TW[aa][ab][ac][ad][aq][ar][as][ba][bb][bo][bq][bs][ca][cb][da]
+#    [dc][dd][dm][dn][ea][eb][em][fa][fb][fc][fm][ga][gb][gc][gd]
+#    [gl][gm][ha][hb][hc][hd][hk][hl][ia][ik][jc][jd][jk][jl][jm]
+#    [km][or][os][pr][ps][qq][qs][ra][rb][ri][rj][rq][rr][rs][sa]
+#    [sb][sc][sd][sg][sh][si][sk][sm][sn][sp][sq][sr][ss]
+#  TB[ai][bh][bj][cg][ci][cj][dh][eh][ei][ej][er][fg][fh][fq][fs]
+#    [gp][gr][gs][hq][hr][hs][ig][ip][iq][ir][is][jg][jh][jp][jq]
+#    [jr][js][kq][kr][ks][la][lg][lh][ma][mb][mc][mf][na][nc][nf]
+#    [nh][nj][nk][no][ob][od][oe][og][oi][oj][ol][oo][pe][ph][pm]
+#    [qe][qf]
+#  TT[]W[])
