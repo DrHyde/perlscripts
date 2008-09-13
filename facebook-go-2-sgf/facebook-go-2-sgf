@@ -1,0 +1,28 @@
+#!/usr/local/bin/perl
+
+use strict;
+use warnings;
+
+use LWP::Simple;
+use Games::Goban;
+
+my $game = shift;
+
+if(!$game) {
+    die("
+$0 game_id
+
+You must specify a game id.  eg ...
+
+$0 158110
+");
+}
+
+my @web = split(
+    /[\n\r]+/,
+    get("http://facebook3.wx3.com/go/go_iframe_spectate.php?game_id=$game")
+);
+
+my $handicap = (grep { /new goMove.*HANDICAP/ } @web)[0];
+my $last = (grep { /new goMove/ } @web)[-3]; # back three to skip dead stone marking
+
