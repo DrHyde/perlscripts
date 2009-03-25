@@ -1,0 +1,55 @@
+#!/usr/bin/perl
+
+use warnings;
+use strict;
+
+use POSIX;
+
+$/ = undef;
+
+my($title, $in, $out) = ('', '');
+
+$title = shift(@ARGV);
+if($title eq '-h') { help() }
+ else { ($in, $out) = @ARGV; }
+
+die("Not enough arguments.  $0 -h for help.\n") unless($out);
+
+open(my $outfile, '>', $out) || die("Can't write $out\n");
+close($outfile);
+
+open(my $infile, $in) || die("Can't read $in\n");
+my $text = <$infile>;
+close($infile);
+
+$text =~ s/\r//g; # DOS line-endings MUST DIE
+$text =~ s/\n\n+/{PARABREAK}/g;
+$text =~ s/\n/ /g;
+$text =~ s/{PARABREAK}/\n\n/g;
+
+my $temp = POSIX::tmpnam();
+open(my $tempfile, '>', $temp) || die("Can't write $temp\n");
+print $tempfile $text;
+close($tempfile);
+system('txt2pdbdoc', $title, $temp, $out);
+unlink $temp;
+
+sub help {
+    print qq{
+$0 - convert a Project Gutenberg ebook to Palm PDB format
+
+$0 "Book Title" inputfile.txt outputfile.pdb
+
+This requires the third-party utility txt2pdbdoc, which can be retrieved
+from http://homepage.mac.com/pauljlucas/software/txt2pdbdoc/ or
+http://www.cantrell.org.uk/david/tech/txt2pdbdoc-1.4.3.tar.gz.
+
+This program is copyright 2009 David Cantrell <david\@cantrell.org.uk>.
+
+This software is free-as-in-speech software, and may be used,
+distributed, and modified under the terms of either the GNU
+General Public Licence version 2 or the Artistic Licence.  It's
+up to you which one you use.  The full text of the licences can
+be found in the files GPL2.txt and ARTISTIC.txt, respectively.
+};
+}
