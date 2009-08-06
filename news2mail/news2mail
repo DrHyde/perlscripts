@@ -8,7 +8,7 @@ use GDBM_File;
 use Email::Send;
 use Data::Dumper;
 
-use constant DEBUG => 0;
+use constant DEBUG => 1;
 
 select(STDERR); $| = 1; select(STDOUT);
 
@@ -18,8 +18,7 @@ unless(-d $confdir && -f $confdir.'/config.pl') {
     open(FILE, ">$confdir/config.pl") || die("Couldn't create $confdir/config.pl\n");
     print FILE join("\n",
         "smtphost => 'localhost',",
-	"# set this if you want to pipe to a command instead",
-	"# mailer  => '/usr/sbin/sendmail -oi',", 
+	"mailer  => 'SMTP',", 
         "address  => 'myaddress\@example.com',",
 	"'user:pass\@news.example.com:119' => {",
 	"    'misc.test'  => { post => 1 },",
@@ -153,7 +152,7 @@ SERVERS: foreach my $server (keys %{$subscriptions}) {
                     )
                 );
             } else {
-	        open(my $mailfh, "|$mailer") || die("Can't write to $mailer\n");
+	        open(my $mailfh, "|mail $address") || die("Can't run mail command\n");
 		print $mailfh 
 	            join("\n\n",
 	                join("\n", sort { $a cmp $b } @headers),
