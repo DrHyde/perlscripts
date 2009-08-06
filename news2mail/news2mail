@@ -18,10 +18,13 @@ unless(-d $confdir && -f $confdir.'/config.pl') {
     open(FILE, ">$confdir/config.pl") || die("Couldn't create $confdir/config.pl\n");
     print FILE join("\n",
         "smtphost => 'localhost',",
+	"# set this if you want to pipe to a command instead",
+	"# mailer  => '/usr/sbin/sendmail -oi',", 
         "address  => 'myaddress\@example.com',",
 	"'user:pass\@news.example.com:119' => {",
 	"    'misc.test'  => { post => 1 },",
 	"    'alt.config' => { post => 1 },",
+	"# set this if you want to pipe to a command instead",
 	"},",
 	"'privateserver.localdomain' => {",
 	"    'my.secret.newsgroup'  => { post => 1 },",
@@ -39,8 +42,10 @@ my $subscriptions = { do $confdir.'/config.pl' };
 
 my $smtphost = $subscriptions->{smtphost};
 my $address = $subscriptions->{address};
+my $mailer = $subscriptions->{mailer};
 delete $subscriptions->{smtphost};
 delete $subscriptions->{address};
+delete $subscriptions->{mailer};
 
 SERVERS: foreach my $server (keys %{$subscriptions}) {
     unless(-d "$confdir/$server") {
@@ -137,14 +142,25 @@ SERVERS: foreach my $server (keys %{$subscriptions}) {
 
 	    my $body = $article;
             
-	    my $sender = Email::Send->new({mail => 'SMTP'});
-	    $sender->mailer_args([Host => $smtphost]);
-	    $sender->send(
-	        join("\n\n",
-	            join("\n", sort { $a cmp $b } @headers),
-	            join("\n", @{$body})
-                )
-            );
+
+	    if($mailer eq 'SMTP') {
+	        my $sender = Email::Send->new({mail => 'SMTP'});
+	        $sender->mailer_args([Host => $smtphost]);
+	        $sender->send(
+	            join("\n\n",
+	                join("\n", sort { $a cmp $b } @headers),
+	                join("\n", @{$body})
+                    )
+                );
+            } else {
+	        open(my $mailfh, "|$mailer") || die("Can't write to $mailer\n");
+		print $mailfh 
+	            join("\n\n",
+	                join("\n", sort { $a cmp $b } @headers),
+	                join("\n", @{$body})
+                    );
+		close($mailfh);
+	    }
 
 	    $seen{$msgid} = time(); # so we never fetch this one again
 	    $lastretrieved++;
