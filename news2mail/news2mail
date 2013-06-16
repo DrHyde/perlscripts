@@ -5,10 +5,10 @@ use warnings;
 
 use Net::NNTP::Client;
 use GDBM_File;
-use Email::Send;
+use MIME::Lite;
 use Data::Dumper;
 
-use constant DEBUG => 1;
+use constant DEBUG => 0;
 
 select(STDERR); $| = 1; select(STDOUT);
 
@@ -143,14 +143,12 @@ SERVERS: foreach my $server (keys %{$subscriptions}) {
             
 
 	    if($mailer eq 'SMTP') {
-	        my $sender = Email::Send->new({mail => 'SMTP'});
-	        $sender->mailer_args([Host => $smtphost]);
-	        $sender->send(
-	            join("\n\n",
-	                join("\n", sort { $a cmp $b } @headers),
-	                join("\n", @{$body})
-                    )
-                );
+		MIME::Lite->send(smtp => $smtphost, Timeout => 20);
+		my $msg = MIME::Lite->new(
+		    Data => join("\n", @{$body}),
+		    map { /(.*:) (.*)/; $1 => $2 } sort @headers
+		);
+	        $msg->send();
             } else {
 	        open(my $mailfh, "|mail $address") || die("Can't run mail command\n");
 		print $mailfh 
