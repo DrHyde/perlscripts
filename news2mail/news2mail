@@ -6,7 +6,7 @@ use warnings;
 use Net::NNTP::Client;
 use GDBM_File;
 use MIME::Lite;
-use Data::Dumper;
+use Email::Valid;
 
 use constant DEBUG => 0;
 
@@ -128,6 +128,14 @@ SERVERS: foreach my $server (keys %{$subscriptions}) {
 	    foreach my $line (@newsheaders) {
 		if($line =~ /^(Message-Id|Date|Subject|From)/i) {
 		    # headers common to mail and news
+		    # but From might contain gibberish
+		    if($line =~ /^From:\s+(.*)$/) {
+		        my $addr = $1;
+			if(!Email::Valid->address($addr)) {
+			    warn("$addr isn't a valid address\n");
+			    $line = 'From: Mrs. Invalid-Address <bozo@dev.null>';
+			}
+		    }
 		    push @headers, $line;
 	        } elsif($line =~ /^Path: (.*)$/i) {
                     push @headers, "Received: from $host with NNTP path $1";
