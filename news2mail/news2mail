@@ -132,7 +132,7 @@ SERVERS: foreach my $server (keys %{$subscriptions}) {
 		    if($line =~ /^From:\s+(.*)$/) {
 		        my $addr = $1;
 			if(!Email::Valid->address($addr)) {
-			    warn("$addr isn't a valid address\n");
+			    warn("$addr isn't a valid address, re-writing\n");
 			    $line = 'From: Mrs. Invalid-Address <bozo@dev.null>';
 			}
 		    }
