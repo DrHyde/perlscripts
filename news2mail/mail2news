@@ -12,7 +12,7 @@ open(my $log, '>>', '/tmp/mail2news.log');
 $SIG{__DIE__} = sub {
     print $log @_;
     exit(1);
-}
+};
 
 use constant DEBUG => 0;
 
