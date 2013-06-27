@@ -7,6 +7,13 @@ use Data::Dumper;
 use Net::NNTP;
 use News::Article;
 
+open(my $log, '>>', '/tmp/mail2news.log');
+
+$SIG{__DIE__} = sub {
+    print $log @_;
+    exit(1);
+}
+
 use constant DEBUG => 0;
 
 select(STDERR); $| = 1; select(STDOUT);
@@ -36,7 +43,7 @@ foreach my $server (grep { $subs->{$_}->{$group} } keys %{$subs}) {
     $client->authinfo($user => $pass) if($user);
 
     unless($client->postok()) {
-        print STDERR "mail2news configured to post to $group via\n".
+        print $log "mail2news configured to post to $group via\n".
 	   "$server, but it didn't say we can post.  Bother and damnation!\n";
 	next;
     }
