@@ -71,7 +71,7 @@ pod2usage({ -message => "source must be a directory", -exitval => 1 }) unless(-d
 pod2usage({ -message => "target must be a directory\n", -exitval => 1 }) unless(-d $target);
 pod2usage({ -message => "httpdir must be sane\n", -exitval => 1 }) unless($httpdir =~ /^https?:\/\//);
 pod2usage({ -message => "sortby must be one of [".join(', ', sort keys %sorters)."]", -exitval => 1 })
-    unless($sortby = $sorters{$sortby});
+    unless(my $sortsub = $sorters{$sortby});
 
 opendir(SOURCE, $source) || die("Can't read $source\n");
 my @files = grep { -f "$source/$_" && $_ =~ /\.(mp3|m4a|mp4|m4v)$/ } readdir(SOURCE);
@@ -80,27 +80,31 @@ foreach my $file (@files) {
     unlink("$target/$file");
     link("$source/$file", "$target/$file");
 }
+(my $title = $source) =~ s/.*\//Podcast of /;
+my $count = time();
 
 Template->new()->process(
 # print Dumper(
     \(''.read_file(\*DATA)),
     {
-        title => "Podcast of $source",
-        homepage => $httpdir,
+        title       => $title,
+        homepage    => $httpdir,
         description => "The media files from $source",
-        pubdate => time2str(),
-        items => [ map {
+        pubdate     => time2str(),
+        items       => [ map {
+            $count++;
             my ($size, $mtime) = (stat($_))[7, 9];
+            (my $filename = $_) =~ s/.*\///;
             (my $url = $_) =~ s/^$target/$httpdir/;
             {
-                title => $_,
+                title       => $filename,
                 description => $_,
-                pubdate => time2str($mtime),
-                size => $size,
-                url => $url,
-                mime => MIME::Types->new()->mimeTypeOf($_),
+                pubdate     => time2str($sortby eq 'mtime' ? $mtime : $count),
+                size        => $size,
+                url         => $url,
+                mime        => MIME::Types->new()->mimeTypeOf($_),
             }
-        } sort { $sortby->($a, $b) } map { "$target/$_" } @files ]
+        } sort { $sortsub->($a, $b) } map { "$target/$_" } @files ]
     },
     "$target/feed.xml"
 );
