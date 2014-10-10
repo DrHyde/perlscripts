@@ -80,7 +80,7 @@ foreach my $file (@files) {
     unlink("$target/$file");
     link("$source/$file", "$target/$file");
 }
-(my $title = $source) =~ s/.*\//Podcast of /;
+my $title = "Podcast of ".(grep { $_ } split('/', $source))[-1];
 my $count = time();
 
 Template->new()->process(
