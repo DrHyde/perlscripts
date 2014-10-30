@@ -1,4 +1,4 @@
-#!/home/david/perl5/perlbrew/perls/perl-5.20.0/bin/perl
+#!/usr/bin/env perl
 
 =head1 NAME
 
