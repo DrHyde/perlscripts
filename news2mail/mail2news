@@ -14,7 +14,7 @@ $SIG{__DIE__} = sub {
     exit(1);
 };
 
-use constant DEBUG => 0;
+use constant DEBUG => 1;
 
 select(STDERR); $| = 1; select(STDOUT);
 
@@ -23,6 +23,7 @@ die("mail2news hasn't been configured.\n") unless(-r '/etc/mail2newsrc');
 my $subs = { do '/etc/mail2newsrc' };
 
 my $group = shift;
+print $log "Trying to post to $group\n" if(DEBUG);
 die("mail2news must be told what group to post to\n") unless($group);
 
 my $article = News::Article->new();
@@ -33,6 +34,7 @@ $article->add_date();
 
 my $posted_ok = 0;
 foreach my $server (grep { $subs->{$_}->{$group} } keys %{$subs}) {
+    print $log "Using server $server\n" if(DEBUG);
     my($auth, $host) = split('@', $server);
     ($auth, $host) = (':', $auth) if(!$host);
     my($user, $pass) = split(':', $auth);
