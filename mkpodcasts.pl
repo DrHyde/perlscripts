@@ -75,6 +75,7 @@ pod2usage({ -message => "httpdir must be sane\n", -exitval => 1 }) unless($httpd
 pod2usage({ -message => "sortby must be one of [".join(', ', sort keys %sorters)."]", -exitval => 1 })
     unless(my $sortsub = $sorters{$sortby});
 
+$source = '' if($source eq '.');
 ($source, $target) = map { ($_ !~ /^\// ? getcwd.'/' : '').$_ } ($source, $target);
 
 opendir(SOURCE, $source) || die("Can't read $source\n");
