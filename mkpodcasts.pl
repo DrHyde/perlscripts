@@ -21,7 +21,8 @@ or .m4v are considered media files.
 
 The directory to put the podcast in. This must not be the same as the source,
 but must be on the same filesystem because hard-links are created for the
-media files. A 'feed.xml' file is also created.
+media files. If it doesn't exist it will be created. A 'feed.xml' file is also
+created.
 
 =head2 --httpdir
 
@@ -43,6 +44,7 @@ terms laid out in the GNU General Public Licence version 2.
 use strict;
 use warnings;
 
+use Cwd;
 use Template;
 use Data::Dumper;
 use MIME::Types;
@@ -68,10 +70,12 @@ my %sorters = (
     name  => sub { $_[0] cmp $_[1] },
 );
 pod2usage({ -message => "source must be a directory", -exitval => 1 }) unless(-d $source);
-pod2usage({ -message => "target must be a directory\n", -exitval => 1 }) unless(-d $target);
+pod2usage({ -message => "target must be a directory\n", -exitval => 1 }) unless(-d $target || mkdir $target);
 pod2usage({ -message => "httpdir must be sane\n", -exitval => 1 }) unless($httpdir =~ /^https?:\/\//);
 pod2usage({ -message => "sortby must be one of [".join(', ', sort keys %sorters)."]", -exitval => 1 })
     unless(my $sortsub = $sorters{$sortby});
+
+($source, $target) = map { ($_ !~ /^\// ? getcwd.'/' : '').$_ } ($source, $target);
 
 opendir(SOURCE, $source) || die("Can't read $source\n");
 my @files = grep { -f "$source/$_" && $_ =~ /\.(mp3|m4a|mp4|m4v)$/ } readdir(SOURCE);
@@ -108,6 +112,18 @@ Template->new()->process(
     },
     "$target/feed.xml"
 );
+
+open (my $fh, '>', "$target/update.sh") || die("Can't write $target/update.sh\n");
+print $fh "#!/bin/sh\n";
+print $fh join(' ', map { "\"$_\"" } (
+    $0,
+    '--source'  => $source,
+    '--target'  => $target,
+    '--sortby'  => $sortby,
+    '--httpdir' => $httpdir
+));
+close($fh);
+chmod 0700, "$target/update.sh";
 
 __DATA__
 <?xml version="1.0" encoding="utf-8"?>
