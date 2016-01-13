@@ -63,17 +63,39 @@ GetOptions(
     'httpdir=s' => \$httpdir,
     'help|?'    => \$help,
 );
+
+sub spew_args {
+    print "You said:\n";
+    print "  --source  '$source'\n"  if(defined($source));
+    print "  --target  '$target'\n"  if(defined($target));
+    print "  --httpdir '$httpdir'\n" if(defined($httpdir));
+    print "  --sortby  '$sortby'\n"  if(defined($sortby));
+    print "\n";
+}
+
 pod2usage(0) if($help);
 
 my %sorters = (
     mtime => sub { (stat($_[0]))[9] <=> (stat($_[1]))[9] },
     name  => sub { $_[0] cmp $_[1] },
 );
-pod2usage({ -message => "source must be a directory", -exitval => 1 }) unless(-d $source);
-pod2usage({ -message => "target must be a directory\n", -exitval => 1 }) unless(-d $target || mkdir $target);
-pod2usage({ -message => "httpdir must be sane\n", -exitval => 1 }) unless($httpdir =~ /^https?:\/\//);
-pod2usage({ -message => "sortby must be one of [".join(', ', sort keys %sorters)."]", -exitval => 1 })
-    unless(my $sortsub = $sorters{$sortby});
+
+unless($source && -d $source) {
+    spew_args();
+    pod2usage({ -message => "source must be a directory", -exitval => 1 });
+}
+unless($target && -d $target || mkdir $target) {
+    spew_args();
+    pod2usage({ -message => "target must be a directory\n", -exitval => 1 })
+}
+unless($httpdir && $httpdir =~ /^https?:\/\//) {
+    spew_args();
+    pod2usage({ -message => "httpdir must be sane\n", -exitval => 1 })
+}
+my $sortsub; unless($sortsub = $sorters{$sortby}) {
+    spew_args();
+    pod2usage({ -message => "sortby must be one of [".join(', ', sort keys %sorters)."]", -exitval => 1 })
+}
 
 $source = '' if($source eq '.');
 ($source, $target) = map { ($_ !~ /^\// ? getcwd.'/' : '').$_ } ($source, $target);
