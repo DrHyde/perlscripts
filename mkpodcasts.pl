@@ -15,14 +15,16 @@ The first three arguments are mandatory.
 =head2 --source
 
 The directory to get files from. Currently files ending in .mp3, .m4a, .mp4,
-or .m4v are considered media files.
+.m4v, or .mkv are considered media files.
 
 =head2 --target
 
 The directory to put the podcast in. This must not be the same as the source,
 but must be on the same filesystem because hard-links are created for the
-media files. If it doesn't exist it will be created. A 'feed.xml' file is also
-created.
+media files. If it doesn't exist it will be created. If it does exist its
+contents will be deleted before it is populated. A 'feed.xml' file is also
+created. An 'update.sh' file is also created which, when run, will re-scan the
+source and re-build the target.
 
 =head2 --httpdir
 
@@ -55,6 +57,7 @@ use Pod::Usage;
 
 my $sortby = 'mtime';
 my($source, $target, $httpdir, $help);
+my $stuff_changed = 0;
 
 GetOptions(
     'source=s'  => \$source,
@@ -84,7 +87,7 @@ unless($source && -d $source) {
     spew_args();
     pod2usage({ -message => "source must be a directory", -exitval => 1 });
 }
-unless($target && -d $target || mkdir $target) {
+unless($target && -d $target || ($stuff_changed = mkdir $target)) {
     spew_args();
     pod2usage({ -message => "target must be a directory\n", -exitval => 1 })
 }
@@ -100,13 +103,43 @@ my $sortsub; unless($sortsub = $sorters{$sortby}) {
 $source = '' if($source eq '.');
 ($source, $target) = map { ($_ !~ /^\// ? getcwd.'/' : '').$_ } ($source, $target);
 
+opendir(TARGET, $target) || die("Can't read $target\n");
 opendir(SOURCE, $source) || die("Can't read $source\n");
-my @files = grep { -f "$source/$_" && $_ =~ /\.(mp3|m4a|mp4|m4v)$/ } readdir(SOURCE);
+my %targetfiles = map { $_, 1 } grep { -f "$target/$_" && $_ =~ /\.(mp3|m4a|mp4|m4v|mkv)$/ } readdir(TARGET);
+my %sourcefiles = map { $_, 1 } grep { -f "$source/$_" && $_ =~ /\.(mp3|m4a|mp4|m4v|mkv)$/ } readdir(SOURCE);
 closedir(SOURCE);
-foreach my $file (@files) {
-    unlink("$target/$file");
-    link("$source/$file", "$target/$file");
+closedir(TARGET);
+
+# look for files in the target that don't exist in the source
+foreach my $targetfile (keys %targetfiles) {
+    if(!exists($sourcefiles{$targetfile})) {
+        unlink("$target/$targetfile") || die("Can't delete $target/$targetfile\n");
+        $stuff_changed = 1;
+    }
 }
+
+# look for files in the source that don't exist in the target
+foreach my $sourcefile (keys %sourcefiles) {
+    if(!exists($targetfiles{$sourcefile})) {
+        link("$source/$sourcefile", "$target/$sourcefile");
+        $stuff_changed = 1;
+    }
+}
+
+open (my $fh, '>', "$target/update.sh") || die("Can't write $target/update.sh\n");
+print $fh "#!/bin/sh\n";
+print $fh join(' ', map { "\"$_\"" } (
+    $0,
+    '--source'  => $source,
+    '--target'  => $target,
+    '--sortby'  => $sortby,
+    '--httpdir' => $httpdir
+));
+close($fh);
+chmod 0700, "$target/update.sh";
+
+exit unless($stuff_changed);
+
 my $title = "Podcast of ".(grep { $_ } split('/', $source))[-1];
 my $count = time();
 
@@ -131,22 +164,10 @@ Template->new()->process(
                 url         => $url,
                 mime        => MIME::Types->new()->mimeTypeOf($_),
             }
-        } sort { $sortsub->($a, $b) } map { "$target/$_" } @files ]
+        } sort { $sortsub->($a, $b) } map { "$target/$_" } keys %sourcefiles ]
     },
     "$target/feed.xml"
 );
-
-open (my $fh, '>', "$target/update.sh") || die("Can't write $target/update.sh\n");
-print $fh "#!/bin/sh\n";
-print $fh join(' ', map { "\"$_\"" } (
-    $0,
-    '--source'  => $source,
-    '--target'  => $target,
-    '--sortby'  => $sortby,
-    '--httpdir' => $httpdir
-));
-close($fh);
-chmod 0700, "$target/update.sh";
 
 __DATA__
 <?xml version="1.0" encoding="utf-8"?>
