@@ -19,7 +19,7 @@ while(@ARGV) {
      else { die("$arg is unrecognized\n"); }
 }
 
-die("--owner is compulsory\n") unless($owner);
+if(!$owner && $user) { $owner = $user }
 die("--user is compulsory\n")  unless($user);
 die("--pass is compulsory\n")  unless($pass);
 die("--label is compulsory\n") unless($label);
@@ -49,24 +49,31 @@ while($next_url) {
     
     REPO: foreach my $repo (@repos) {
         my $full_name = $repo->{full_name};
-        (my $labels_url = $repo->{labels_url}) =~ s/\{.*//;
-        my $check_label_exists_req = HTTP::Request::WithAuth->new(GET => "$labels_url/$label");
+        (my $send_url = $repo->{labels_url}) =~ s/\{.*//;
+	my $send_method  = 'POST';
+
+        my $check_label_exists_req = HTTP::Request::WithAuth->new(GET => "$send_url/$label");
         my $res = $ua->request($check_label_exists_req);
         if($res->is_success()) {
-            print "Label '$label' already exists for $full_name, skipping\n";
-            next REPO;
+	    my $label_data = parse_json($res->content());
+	    if(lc($label_data->{color}) eq lc($colour)) {
+                print "Label '$label' with colour '$colour' already exists for $full_name, skipping\n";
+                next REPO;
+	    } else {
+                print "Label '$label' exists with wrong colour for $full_name, updating\n";
+		$send_method  = 'PATCH';
+		$send_url    .= "/$label";
+	    }
+        }
+
+        my $create_label_req = HTTP::Request::WithAuth->new($send_method  => $send_url);
+        $create_label_req->header('Content-Type'  => 'application/json');
+        $create_label_req->content('{"name":"'.$label.'","color":"'.$colour.'"}');
+        $res = $ua->request($create_label_req);
+        if(!$res->is_success()) {
+            die("Couldn't post to $send_url: ".$res->status_line()."\n".$res->content()."\n");
         } else {
-            my $create_label_req = HTTP::Request::WithAuth->new(POST => "$labels_url");
-            $create_label_req->header('Content-Type'  => 'application/json');
-            # use Data::Dumper;
-            # die(Dumper($create_label_req));
-            $create_label_req->content('{"name":"'.$label.'","color":"'.$colour.'"}');
-            my $res = $ua->request($create_label_req);
-            if(!$res->is_success()) {
-                die("Couldn't post to $labels_url: ".$res->status_line()."\n".$res->content()."\n");
-            } else {
-                print "Created label $label with colour $colour on $full_name\n";
-            }
+            print "Created/updated label $label with colour $colour on $full_name\n";
         }
     }
 }
