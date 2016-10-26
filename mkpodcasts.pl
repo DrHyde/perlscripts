@@ -126,6 +126,8 @@ foreach my $sourcefile (keys %sourcefiles) {
     }
 }
 
+exit unless($stuff_changed);
+
 open (my $fh, '>', "$target/update.sh") || die("Can't write $target/update.sh\n");
 print $fh "#!/bin/sh\n";
 print $fh join(' ', map { "\"$_\"" } (
@@ -137,8 +139,6 @@ print $fh join(' ', map { "\"$_\"" } (
 ));
 close($fh);
 chmod 0700, "$target/update.sh";
-
-exit unless($stuff_changed);
 
 my $title = "Podcast of ".(grep { $_ } split('/', $source))[-1];
 my $count = time();
@@ -170,7 +170,7 @@ Template->new()->process(
 );
 
 __DATA__
-<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8" ?>
 <rss version="2.0" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:wfw="http://wellformedweb.org/CommentAPI/" xmlns:content="http://purl.org/rss/1.0/modules/content/" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:atom="http://www.w3.org/2005/Atom">
   <channel>
     <!-- fuck yeah this is cargo culted. i dunno shit about podcasts -->
@@ -180,10 +180,10 @@ __DATA__
     <pubDate>[% pubdate %]</pubDate>
     [% FOREACH item IN items %]
     <item>
-      <title>[% item.title %]</title>
-      <description>[% item.description %]</description>
+      <title>[% item.title | xml %]</title>
+      <description>[% item.description | xml %]</description>
       <pubDate>[% item.pubdate %]</pubDate>
-      <enclosure url="[% item.url %]" type="[% item.mime %]" length="[% item.size %]"/>
+      <enclosure url="[% item.url | xml %]" type="[% item.mime %]" length="[% item.size %]"/>
     </item>
     [% END %]
   </channel>
