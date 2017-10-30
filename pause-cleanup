@@ -1,0 +1,202 @@
+#!/usr/bin/env perl
+
+# adapted from https://github.com/rjbs/misc/blob/master/perl/tl, 2014-04-23
+# copied from https://github.com/karenetheridge/misc/blob/master/install/generic/bin/pause-cleanup, 2017-10-30
+
+use 5.010;
+use strict;
+use warnings;
+
+use Carp;
+use CPAN::DistnameInfo;
+use File::Spec;
+use WWW::Mechanize;
+use Path::Tiny;
+use HTTP::Tiny;
+use Parse::CPAN::Packages::Fast;
+
+# keep the last N stable dists
+my $keep = shift || 2;
+
+my $home = $ENV{HOME} || '.';
+my $rc   = File::Spec->catfile($home, '.pause');
+
+my $USAGE=
+"usage: $0 <keep>
+or: $0 <keep> USER PASS
+
+<keep> is the number of versions to keep
+       defaults to 2
+       optional if USER and PASS are not passed on the command line
+
+$home/.pause format: 
+user <username>
+password <password>
+";
+
+# Process .pause
+open my $pauserc, '<', $rc or die "can't open $rc for reading: $!";
+
+my %arg;
+
+while (<$pauserc>) {
+  chomp;
+  next unless $_ and $_ !~ /^\s*#/;
+
+  my ($k, $v) = /^\s*(\w+)\s+(.+)$/;
+  croak "multiple enties for $k" if $arg{$k};
+  $arg{$k} = $v;
+}
+
+if (@ARGV) {
+  die $USAGE unless @ARGV == 2;
+  @arg{ qw(user password) } = @ARGV;
+}
+
+my $username = $arg{user};
+
+die "couldn't get username" unless length $username;
+die "no password found"     unless $arg{password};
+
+my $mech = delete_files_mech();
+
+my @files = grep { defined }
+            map  { $_->possible_values }
+            grep { $_->type eq 'checkbox' }
+            $mech->form_number(1)->inputs;
+
+my %found;
+
+FILE: for my $file (@files) {
+  next FILE if $file eq 'CHECKSUMS';
+
+  my $path = sprintf "authors/id/%s/%s/%s/%s",
+    substr($username, 0, 1),
+    substr($username, 0, 2),
+    $username,
+    $file;
+
+  my $dni;
+
+  if ($file =~ m{\.(readme|meta)\z}) {
+    (my $fake = $path) =~ s{\.$1\z}{.tar.gz};
+
+    $dni = CPAN::DistnameInfo->new($fake);
+  } else {
+    $dni = CPAN::DistnameInfo->new($path);
+
+    unless (defined $dni->extension) {
+      warn "ignoring unknown path type: $path";
+      next FILE;
+    }
+  }
+
+  # lol that'll be the day
+  next if $dni->dist eq 'perl';
+
+  my $by_name = $found{ $dni->dist } ||= {};
+  my $dist = $by_name->{ $dni->version } ||= { values => [] };
+  push @{ $dist->{values} }, $file;
+}
+
+use YAML::XS;
+
+my %ticked;
+
+for my $key (sort keys %found) {
+  my $dist = $found{ $key };
+  next unless keys %$dist > $keep;
+
+  my @versions = sort {
+      use version;
+      (my $x = $a) =~ s/-TRIAL$//;
+      (my $y = $b) =~ s/-TRIAL$//;
+      version->parse($y) <=> version->parse($x)
+  } keys %$dist;
+
+  # we keep the last $keep *stable* releases - work through all releases in
+  # reverse order until we've found that many
+  my $found_stable = 0;
+  my $index;
+  for ($index = 0; $index < @versions; ++$index)
+  {
+      ++$found_stable if $versions[$index] !~ /_/
+          and $versions[$index] !~ qr/-TRIAL$/;
+      last if $found_stable >= $keep;
+  }
+
+  for my $version (map { $versions[$_] } $index+1 .. $#versions) {
+
+    for my $file (@{ $dist->{ $version }{values} }) {
+      if (my @modules = indexed_modules($file)) {
+        warn "scheduling $file for deletion, but WARNING!! $file is still indexed against module(s): ",
+            join(', ', @modules), "\n";
+      } else {
+        print "scheduling $file for deletion\n";
+      }
+      $ticked{ $file } ++;
+    }
+  }
+}
+
+print "ticking ", scalar keys %ticked, " ticky boxes...\n";
+
+do {
+    my $batch_size = 0;
+    for my $input (
+      $mech->find_all_inputs(name => 'pause99_delete_files_FILE')
+    ) {
+      for my $val ($input->possible_values) {
+        next if !defined $val || !$ticked{$val};
+        $input->value($val);
+        delete $ticked{$val};
+        ++$batch_size;
+        if ($batch_size > 999) {
+            $mech->click('SUBMIT_pause99_delete_files_delete');
+            $batch_size = 0;
+            $mech = delete_files_mech();
+        }
+        last;
+      }
+    }
+} while keys %ticked;
+
+$mech->click('SUBMIT_pause99_delete_files_delete');
+# print $mech->content;
+
+
+print "Now go to https://pause.perl.org/pause/authenquery?ACTION=delete_files and confirm that all is well.\n";
+
+### END ###
+
+{
+    my $packages;
+    sub indexed_modules
+    {
+        my $dist_name = shift;
+        $packages //= do {
+            my $tempdir = Path::Tiny->tempdir(CLEANUP => 1);
+            my $filename = '02packages.details.txt.gz';
+            my $path = $tempdir->child($filename);
+            my $base = $ENV{CPAN_INDEX_BASE_URL} || 'http://www.cpan.org';
+            my $url = $base . '/modules/' . $filename;
+            my $response = HTTP::Tiny->new->mirror($url, $path);
+            Parse::CPAN::Packages::Fast->new($path->stringify);
+        };
+
+        my @indexed_dists = grep { $_ =~ /$dist_name$/ } keys %{ $packages->{dist_to_pkgs} };
+        map { @{ $packages->{dist_to_pkgs}{$_} } } @indexed_dists;
+    }
+}
+
+sub delete_files_mech
+{
+    my $mech = WWW::Mechanize->new;
+    $mech->credentials($username, $arg{password});
+
+    my $res = $mech->get(
+      q{https://pause.perl.org/pause/authenquery?ACTION=delete_files}
+    );
+    $mech->form_number(1);
+    $mech;
+}
