@@ -19,11 +19,12 @@ The directory to get files from. Currently files ending in .mp3, .m4a, .mp4,
 
 =head2 --target
 
-The directory to put the podcast in. This must not be the same as the source.
-If it doesn't exist it will be created. If it does exist its contents will be
-deleted before it is populated. A 'feed.xml' file is also created. An
-'update.sh' file is also created which, when run, will re-scan the source and
-re-build the target.
+The directory to put the podcast in. This must not be the same as the source,
+but must be on the same filesystem because hard-links are created for the
+media files. If it doesn't exist it will be created. If it does exist its
+contents will be deleted before it is populated. A 'feed.xml' file is also
+created. An 'update.sh' file is also created which, when run, will re-scan the
+source and re-build the target.
 
 =head2 --httpdir
 
@@ -121,7 +122,7 @@ foreach my $targetfile (keys %targetfiles) {
 # look for files in the source that don't exist in the target
 foreach my $sourcefile (keys %sourcefiles) {
     if(!exists($targetfiles{$sourcefile})) {
-	symlink("$source/$sourcefile", "$target/$sourcefile") || die($!);
+        link("$source/$sourcefile", "$target/$sourcefile");
         $stuff_changed = 1;
     }
 }
