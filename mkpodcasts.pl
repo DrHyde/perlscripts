@@ -54,6 +54,7 @@ use File::Slurp;
 use Getopt::Long;
 use HTTP::Date;
 use Pod::Usage;
+use Sort::Naturally qw(ncmp);
 
 my $sortby = 'mtime';
 my($source, $target, $httpdir, $help);
@@ -80,7 +81,7 @@ pod2usage(0) if($help);
 
 my %sorters = (
     mtime => sub { (stat($_[0]))[9] <=> (stat($_[1]))[9] },
-    name  => sub { $_[0] cmp $_[1] },
+    name  => sub { ncmp($_[0], $_[1]) },
 );
 
 unless($source && -d $source) {
