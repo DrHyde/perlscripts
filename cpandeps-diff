@@ -71,9 +71,13 @@ sub _add ($module) {
 }
 
 sub _get_deps ($module) {
-    (my $version = $^V) =~ s/^v//;
-    my $deps = qx{ cpandeps $module perl $version cachedir .cpandeps-diff/cache 02packages .cpandeps-diff/cache/02packages.details.txt.gz };
-    return join("\n", sort { $a cmp $b } map { s/^.*\(dist: ([^\)]+)\).*/$1/r  } grep { $_ !~ /^$module / }  split("\n", $deps));
+    return join("\n", sort { $a cmp $b } map { $_->distribution() } grep { $module ne $_->name() } CPAN::FindDependencies::finddeps(
+        $module,
+        nowarnings   => 1,
+        perl         => ($^V =~ s/^v//r),
+        cache_dir    => '.cpandeps-diff/cache',
+        '02packages' => '.cpandeps-diff/cache/02packages.details.txt.gz',
+    ));
 }
 
 sub _remove ($module) {
