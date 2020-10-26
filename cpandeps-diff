@@ -1,10 +1,15 @@
 #!/usr/bin/env perl
+#
+# This is an old version of the code, the canonical version is in
+# the CPAN::FindDependencies repository and will be bundled with
+# it from version 3.00 onwards. This version should be compatible,
+# but doesn't allow over-riding of defaults for things like which
+# mirror to use
 
 use 5.028;
 
 use CPAN::FindDependencies;
 use File::Find::Rule::Age;
-use LWP::Simple;
 use Text::Diff;
 
 use feature 'signatures';
@@ -18,9 +23,6 @@ mkdir('.cpandeps-diff/cache');
 # clear out Ye Olde cache files. Max age is 23h so multiple runs within a
 # day won't hammer servers, but a daily cron job will always be fresh
 unlink(File::Find::Rule->file()->age(older => '23h')->in('.cpandeps-diff/cache'));
-
-# fetch 02packages so that is cached across multiple invocations
-getstore('http://www.cpan.org/modules/02packages.details.txt.gz', '.cpandeps-diff/cache/02packages.details.txt.gz') unless(-f '.cpandeps-diff/cache/02packages.details.txt.gz');
 
 if(@ARGV) {
     while(my $arg = shift(@ARGV)) {
@@ -76,7 +78,6 @@ sub _get_deps ($module) {
         nowarnings   => 1,
         perl         => ($^V =~ s/^v//r),
         cache_dir    => '.cpandeps-diff/cache',
-        '02packages' => '.cpandeps-diff/cache/02packages.details.txt.gz',
     ));
 }
 
