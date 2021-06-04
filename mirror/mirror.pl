@@ -459,8 +459,6 @@ $exit_fail_noconnect = 2;
 # -ULOGFILE	Set the upload log to LOGILE - if none given uses
 #		the file $home/upload_log.$mday.$mon.$year
 
-# -DUMP		Dump perl - to be later undumped --  THIS DOES NOT YET WORK!!!
-
 sub msg_version
 {
 	&msg( '$Id: mirror.pl,v 2.9 1998/05/29 19:01:07 lmjm Exp lmjm $' . "\n" );
@@ -688,13 +686,6 @@ while( $ARGV[ 0 ] =~ /^-/ ){
 		}
 			
 		next;
-	}
-
-	if( $arg eq '-DUMP' ){
-		# THIS DOES NOT YET WORK!!!!!
-		$dumped_version = 1;
-		warn "Dumping perl\n";
-		dump parse_args;
 	}
 
 	warn "Unknown arg $arg, skipping\n";
