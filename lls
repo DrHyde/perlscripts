@@ -1,0 +1,277 @@
+#!/usr/bin/env perl
+
+use 5.012;
+use strict;
+use warnings;
+use utf8;
+use open ":std", ":encoding(UTF-8)";
+use experimental qw(signatures);
+
+use Getopt::Long;
+Getopt::Long::Configure('bundling');
+use Pod::Usage;
+
+use Cwd qw(abs_path);
+use File::Basename;
+use File::cd;
+use POSIX qw(strftime);
+
+# this requires nerd-fonts, and proper terminal configuation
+# font cheat sheet: https://www.nerdfonts.com/cheat-sheet
+
+GetOptions(
+    'l'        => \my $opt_l,
+    'a'        => \my $opt_a,
+    'A'        => \my $opt_A,
+    'd'        => \my $opt_d,
+    'r'        => \my $opt_r,
+    't'        => \my $opt_t,
+    'S'        => \my $opt_S,
+    'R'        => \my $opt_R,
+    'git|g'    => \my $opt_git, # FIXME NYI
+    'help|h|?' => \my $help,    # FIXME NYI
+);
+$opt_l++ if($opt_git);
+my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
+@targets = ('.') unless(@targets);
+
+if($help) { pod2usage(0) }
+
+my @last;
+work_on(0, @targets);
+
+sub work_on ($depth, @targets) {
+    my $have_already_rendered;
+    my $prev_rendered_was_dir;
+    foreach my $target (@targets) {
+        if(-d $target && !$opt_d) {
+            if($#targets > 0) {
+                print "\n" if($have_already_rendered);
+                print "$target:\n";
+            }
+    
+            if($opt_R && !$depth) {
+                $opt_R = 0;
+                print render(0, $target);
+                $opt_R = 1;
+            }
+            cd $target => sub {
+                $prev_rendered_was_dir = 1;
+                opendir(my $dh, '.') || die("Couldn't read $target: $!\n");
+                my @dirents = sortfiles(readdir($dh));
+                while(@dirents) {
+                    my $dirent = shift(@dirents);
+                    $last[$depth] = !@dirents;
+                    next if($dirent =~ /^\.\.?$/ && ($depth + 1 || !$opt_a));
+                    next if($dirent =~ /^\./     && !($opt_a || $opt_A));
+    
+                    print render($depth, $dirent);
+                    work_on($depth + 1, $dirent)
+                        if($opt_R && !-l $dirent && -d $dirent && $dirent ne '.git')
+                }
+                closedir($dh);
+            };
+        } else {
+            print "\n" if($prev_rendered_was_dir);
+            print render($depth, $target);
+            $prev_rendered_was_dir = 0;
+        }
+        $have_already_rendered = 1;
+    }
+}
+
+sub render ($depth, $dirent) {
+    my $icons    = get_icons(abs_path('.')."/$dirent");
+    my $filename = get_rendered_filename($dirent);
+    if(!$opt_l) {
+        return sprintf("%s %s\n", $icons, $filename);
+    } else {
+        return sprintf(
+            "%s %3d %s %s %4d %s %12s %s%s %s%s%s\n",
+            format_mode((lstat($dirent))[2]),
+            (lstat($dirent))[3], # links
+            (getpwuid((lstat($dirent))[4]))[0], # user
+            (getgrgid((lstat($dirent))[5]))[0], # group
+            format_size((lstat($dirent))[7]), # size
+            strftime(
+                (time - (lstat($dirent))[9] < 60*60*24*365/2 ? "%d %b %H:%M" : "%d %b  %Y"),
+                (localtime((lstat($dirent))[9]))[0 .. 5]
+            ),
+            $icons,
+            ($opt_git ? " --" : ''),
+            ($opt_R ? format_tree_art($depth) : ''),
+            $filename,
+            (-l $dirent ? " -> ".readlink($dirent) : '')
+        );
+    }
+}
+
+sub format_tree_art ($depth) {
+    my $art = '';
+    foreach my $index ( 0 .. $depth - 1 ) {
+        if($last[$index]) {
+            $art .= '  '
+        } else {
+            $art .= '│ '
+        }
+    }
+    if($last[$depth]) {
+        $art .= '└─'
+    } else {
+        $art .= '├─'
+    }
+    return "$art ";
+}
+
+sub format_size ($size) {
+    my @multipliers = qw(B K M G T);
+    while($size > 1024) {
+        $size >>= 10;
+        shift @multipliers
+    }
+    return ($size, shift(@multipliers));
+}
+
+# lovingly stolen from https://metacpan.org/release/BDFOY/PerlPowerTools-1.025/source/bin/ls
+sub format_mode ($mode) {
+    my @perms = qw(--- --x -w- -wx r-- r-x rw- rwx);
+    my @ftype = ('', qw(p c ? d ? b ? - ? l ? s ? ? ?));
+    my $setids = ($mode & 07000)>>9;
+    my @permstrs = @perms[($mode&0700)>>6, ($mode&0070)>>3, $mode&0007];
+    my $ftype = $ftype[($mode & 0170000)>>12];
+   
+    if ($setids) {
+        if ($setids & 01) {             # Sticky bit
+            $permstrs[2] =~ s/([-x])$/$1 eq 'x' ? 't' : 'T'/e;
+        }
+        if ($setids & 04) {             # Setuid bit
+            $permstrs[0] =~ s/([-x])$/$1 eq 'x' ? 's' : 'S'/e;
+        }
+        if ($setids & 02) {             # Setgid bit
+            $permstrs[1] =~ s/([-x])$/$1 eq 'x' ? 's' : 'S'/e;
+        }
+    }
+   
+    join '', $ftype, @permstrs;
+}
+
+sub sortfiles (@files) {
+    my $sorter = sorter();
+    @files = sort {
+       $sorter->($a, $b) || ($a cmp $b)
+    } @files;
+    
+    if($opt_r) { return reverse @files }
+     else { return @files }
+}
+
+sub sorter {
+    no warnings 'uninitialized';
+    $opt_t ? sub ($l, $r) {
+                 ((lstat($r))[9] || ~0) <=> ((lstat($l))[9] || ~0)
+             } :
+    $opt_S ? sub ($l, $r) {
+                 ((lstat($r))[7]) <=> ((lstat($l))[7])
+             } :
+             sub { 0 }
+}
+
+sub get_rendered_filename ($filename) {
+    state $ls_command = `ls --version 2>/dev/null`
+        ? 'ls -d --color=always'
+        : 'CLICOLOR_FORCE=1 ls -dG';
+
+    my $rendered_filename = -t STDOUT 
+        ? `$ls_command "$filename"`
+        : $filename;
+    chomp($rendered_filename);
+    return $rendered_filename;
+}
+
+sub get_icon_type_specific {
+    my $filename = basename(shift());
+    (my $ext = $filename) =~ s/^.*\.//;
+    return
+        $filename eq 'cpanfile'                 ? 'tree'   :
+        $ext      eq 'c'                              ? 'c'      :
+        $ext      eq 'cpp'                            ? 'c++'    :
+        $ext      eq 'h'                              ? 'header' :
+        $ext      eq 't'                              ? 'test'   :
+        $ext      eq 'txt'                            ? 'text'   :
+        $ext      eq 'swp'                            ? 'vim'    :
+        $ext      eq 'lock'                           ? 'lock'   :
+        $filename =~ /^Makefile(\.PL)?$/          ? 'tree'   :
+        $filename =~ /^\.git(hub|ignore)?$/       ? 'git'    :
+        $filename =~ /^\.(Apple(DB|Double)|DS_Store)$/ ? 'apple'  :
+        $filename =~ /^\.(appveyor|cirrus)\.yml$/ ? 'ci'     :
+        $filename =~ /^change(s|log)$/i           ? 'list'   :
+        $filename =~ /^MANIFEST(\.SKIP)?$/        ? 'list'   :
+        $filename =~ /\.(xs|p[lm]|PL)$/                  ? 'perl'   :
+        $filename =~ /\.(bs|o)$/                         ? 'object' :
+                                                           '';
+}
+
+sub get_icon_type_generic ($filename) {
+    return
+        -l $filename ? 'link'     :  # must be first
+        -d $filename ? 'dir'      :
+        -x $filename ? 'exec'     :
+        -f $filename ? 'file'     :
+        -p $filename ? 'pipe'     :
+        -S $filename ? 'socket'   :
+        -b $filename ? 'blockdev' :
+        -c $filename ? 'chardev'  :
+                       ''; # WTF!?!?!?
+}
+
+sub get_icons ($filename) {
+    my $generic  = get_icon_type_generic($filename);
+    my $specific = get_icon_type_specific($filename) || (
+        ($generic eq 'dir'  && basename($filename) eq 't'         ) ? 'test'   :
+        ($generic eq 'dir'  && basename($filename) eq 'bin'       ) ? 'exec'   :
+        ($generic eq 'dir'  && basename($filename) eq 'blib'      ) ? 'object' :
+        ($generic eq 'file' && basename($filename) eq 'pm_to_blib') ? 'object' :
+        ($generic eq 'dir'  && -d "$filename/.git"                ) ? 'git'    :
+                                                                     ''
+    );
+
+    if($generic eq 'link') {
+        my $target = readlink($filename);
+        if(!-e $target) {
+            $generic .= 'broken'
+        } else {
+            my $target_type = get_icon_type_generic($target);
+            $generic .= $target_type =~ /^(file|dir)$/ ? $target_type : '';
+        }
+    }
+    state $map = {
+        test       => '',
+        text       => '',
+        list       => '',
+        tree       => 'פּ',
+        lock       => '',
+        perl       => '',
+        vim        => '',
+        c          => '',
+        'c++'      => '',
+        header     => '',
+        object     => '',
+        git        => '',
+        ci         => '',
+        apple      => '',
+
+        dir        => '',
+        link       => '',
+        linkbroken => '',
+        linkfile   => '',
+        linkdir    => '',
+        exec       => '',
+        file       => '',
+        pipe       => 'ﳣ',
+        socket     => 'ﳦ',
+        blockdev   => '',
+        chardev    => '',
+        ''         => ' ',
+    };
+    return join(' ', $map->{$generic}, $map->{$specific});
+}
