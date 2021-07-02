@@ -19,29 +19,83 @@ use POSIX qw(strftime);
 # this requires nerd-fonts, and proper terminal configuation
 # font cheat sheet: https://www.nerdfonts.com/cheat-sheet
 
-GetOptions(
-    'l'        => \my $opt_long,
-    'a'        => \my $opt_all,
-    'A'        => \my $opt_hiddenfiles,
-    'd'        => \my $opt_directories,
-    'r'        => \my $opt_reverse,
-    't'        => \my $opt_time,
-    'S'        => \my $opt_size,
-    'R'        => \my $opt_recurse,
-    'git|g'    => \my $opt_git, # FIXME NYI
-    'help|h|?' => \my $help,    # FIXME NYI
+my %opt_show = map { $_ => 0 } qw(
+    perms links owner group size date icons filename
 );
-$opt_long++ if($opt_git);
+GetOptions(
+    'long|l'    => \my $opt_long,
+    'all|a'     => \my $opt_all,
+    'hidden|A'  => \my $opt_hidden,
+    'dirs|d'    => \my $opt_dirs,
+    'reverse|r' => \my $opt_reverse,
+    'time|t'    => \my $opt_time,
+    'size|S'    => \my $opt_size,
+    'recurse|R' => \my $opt_recurse,
+    'git|g'     => \my $opt_git, # FIXME NYI
+    'ascii|7'   => \my $opt_ascii,
+    'noicons'   => \my $opt_noicons,
+    'help|h|?'  => \my $help,
+    'HELP|H'    => \my $HELP,
+    # defaults
+    show_icons    => \$opt_show{icons},
+    show_filename => \$opt_show{filename},
+    # turned on with -l
+    show_perms    => \$opt_show{perms},
+    show_links    => \$opt_show{links},
+    show_owner    => \$opt_show{owner},
+    show_group    => \$opt_show{group},
+    show_size     => \$opt_show{size},
+    show_date     => \$opt_show{date},
+);
+$opt_noicons = 1 if($opt_ascii);
+
+if($opt_noicons && $opt_show{icons}) {
+    die "\n--noicons and --show_icons makes no sense\n\n";
+}
+if(!grep { $_ } values(%opt_show)) {
+    # the user didn't set any of these so we can
+    if($opt_long) {
+        $opt_show{$_}++ foreach (keys(%opt_show));
+    } else {
+        @opt_show{qw(icons filename)} = (1, 1);
+    }
+}
+$opt_show{git}   = $opt_git;
+$opt_show{tree}  = $opt_recurse;
+$opt_show{icons} = 0 if($opt_noicons);
+
 my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
 
 if($help) { pod2usage(0) }
+if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
 
 my @output_lines;
 my @last;
 work_on(0, @targets);
 
-my $format = $opt_long ? "%s %3d %s %s %4d %s %12s %s%s %s%s%s" : "%s %s";
+my @line_max_sizes = ();
+foreach my $line (grep { ref($_) } @output_lines) {
+    foreach my $index (0 .. $#{$line}) {
+        $line_max_sizes[$index] = length($line->[$index]) if(
+            !defined($line_max_sizes[$index]) ||
+            length($line->[$index]) > $line_max_sizes[$index]
+        )
+    }
+}
+my $format = '';
+$format .= $opt_show{perms}    ? '%s' : '';
+$format .= $opt_show{links}    ? ' %'.($line_max_sizes[1] + 1).'d' : '';
+$format .= $opt_show{owner}    ? ' %'.($line_max_sizes[2] + 1).'s' : '';
+$format .= $opt_show{group}    ? ' %'.($line_max_sizes[3] + 1).'s' : '';
+$format .= $opt_show{size}     ? ' %6s'  : '';
+$format .= $opt_show{date}     ? ' %12s' : '';
+$format .= $opt_show{icons}    ? ' %s'   : '';
+$format .= $opt_show{git}      ? ' %s'   : '';
+$format .= $opt_show{tree}     ? '%s'    : ''; # no space cos tree art always has one
+$format .= $opt_show{filename} ? ' %s'   : '';
+$format =~ s/^ //;
+
 foreach my $line (@output_lines) {
     if(!ref($line)) {
         say $line;
@@ -54,7 +108,7 @@ sub work_on ($depth, @targets) {
     my $have_already_rendered;
     my $prev_rendered_was_dir;
     foreach my $target (@targets) {
-        if(-d $target && !$opt_directories) {
+        if(-d $target && !$opt_dirs) {
             if($#targets > 0) {
                 push @output_lines, "" if($have_already_rendered);
                 push @output_lines, "$target:";
@@ -73,7 +127,7 @@ sub work_on ($depth, @targets) {
                     my $dirent = shift(@dirents);
                     $last[$depth] = !@dirents;
                     next if($dirent =~ /^\.\.?$/ && ($depth + 1 || !$opt_all));
-                    next if($dirent =~ /^\./     && !($opt_all || $opt_hiddenfiles));
+                    next if($dirent =~ /^\./     && !($opt_all || $opt_hidden));
     
                     push @output_lines, build_data($depth, $dirent);
                     work_on($depth + 1, $dirent)
@@ -83,7 +137,7 @@ sub work_on ($depth, @targets) {
             };
         } else {
             push @output_lines, "" if($prev_rendered_was_dir);
-            push @output_lines, render($depth, $target);
+            push @output_lines, build_data($depth, $target);
             $prev_rendered_was_dir = 0;
         }
         $have_already_rendered = 1;
@@ -92,44 +146,45 @@ sub work_on ($depth, @targets) {
 
 sub build_data ($depth, $dirent) {
     my $icons    = get_icons(abs_path('.')."/$dirent");
-    my $filename = get_rendered_filename($dirent);
-    if(!$opt_long) {
-        return [$icons, $filename];
-    } else {
-        return [
-            format_mode(cached_stat($dirent)->[2]),
-            cached_stat($dirent)->[3], # links
-            (getpwuid(cached_stat($dirent)->[4]))[0], # user
-            (getgrgid(cached_stat($dirent)->[5]))[0], # group
-            format_size(cached_stat($dirent)->[7]), # size
-            strftime(
-                (time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" : "%d %b  %Y"),
-                (localtime(cached_stat($dirent)->[9]))[0 .. 5]
-            ),
-            $icons,
-            ($opt_git ? " --" : ''),
-            ($opt_recurse ? format_tree_art($depth) : ''),
-            $filename,
-            (-l $dirent ? " -> ".readlink($dirent) : '')
-        ];
-    }
+    my $filename = get_colourized_filename($dirent);
+
+    return [
+        $opt_show{perms}    ? format_mode(cached_stat($dirent)->[2]) : (),
+        $opt_show{links}    ? cached_stat($dirent)->[3] : (),
+        $opt_show{owner}    ? (getpwuid(cached_stat($dirent)->[4]))[0] : (),
+        $opt_show{group}    ? (getgrgid(cached_stat($dirent)->[5]))[0] : (),
+        $opt_show{size}     ? format_size(cached_stat($dirent)->[7]) : (),
+        $opt_show{date}     ? strftime(
+            (time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" : "%d %b  %Y"),
+            (localtime(cached_stat($dirent)->[9]))[0 .. 5]
+        ) : (),
+        $opt_show{icons}    ? $icons : (),
+        $opt_show{git}      ? "--" : (),
+        $opt_show{tree}     ? (
+            $opt_recurse ? format_tree_art($depth) : ''
+        ) : (),
+        $opt_show{filename} ? join(' ',
+            $filename, (-l $dirent ? ('->', readlink($dirent)) : ())
+        ) : (),
+    ];
 }
 
 sub format_tree_art ($depth) {
     my $art = '';
     foreach my $index ( 0 .. $depth - 1 ) {
         if($last[$index]) {
-            $art .= '  '
+            $art .= '   '
         } else {
-            $art .= '│ '
+            $art .= ' │ '
         }
     }
     if($last[$depth]) {
-        $art .= '└─'
+        $art .= ' └─'
     } else {
-        $art .= '├─'
+        $art .= ' ├─'
     }
-    return "$art ";
+    $art =~ y/│├└─/|+\\-/ if($opt_ascii);
+    return $art;
 }
 
 sub format_size ($size) {
@@ -138,7 +193,7 @@ sub format_size ($size) {
         $size >>= 10;
         shift @multipliers
     }
-    return ($size, shift(@multipliers));
+    return join(' ', $size, shift(@multipliers));
 }
 
 # lovingly stolen from https://metacpan.org/release/BDFOY/PerlPowerTools-1.025/source/bin/ls
@@ -193,7 +248,7 @@ sub cached_stat ($filename) {
     return $stat_cache{$filename} = [lstat($filename)];
 }
 
-sub get_rendered_filename ($filename) {
+sub get_colourized_filename ($filename) {
     state $ls_command = `ls --version 2>/dev/null`
         ? 'ls -d --color=always'
         : 'CLICOLOR_FORCE=1 ls -dG';
@@ -292,3 +347,163 @@ sub get_icons ($filename) {
     };
     return join(' ', $map->{$generic}, $map->{$specific});
 }
+
+=encoding utf8
+
+=head1 NAME
+
+lls - a differently capable and much more configurable `ls`
+
+=head1 SYNOPSIS
+
+  $ lls [OPTIONS] [FILES]
+
+=head1 DEPENDENCIES
+
+A Unixy operating system.
+
+You will need to install C<Nerd Font>. See its instructions on Github:
+L<https://github.com/ryanoasis/nerd-fonts/blob/master/readme.md>.
+
+You will then need to configure your terminal appropriately. If you use
+iTerm on a Mac then see these instructions:
+L<https://github.com/Peltoche/lsd/issues/199#issuecomment-494218334>.
+If you are not using iTerm on a Mac then you are computering wrong.
+
+=head1 OPTIONS
+
+=over
+
+=item -l | --long
+
+Turns on all the available columns. Without any other options this will be the
+same as C<ls -l> but with an extra column of icons before the filenames.
+
+See also L</"DISPLAY OPTIONS">.
+
+=item -a | --all
+
+Show all directory entries. The default is to suppress any whose names
+begin with a dot.
+
+=item -A | --hidden
+
+Show all directory entries except C<.> and C<..>. C<-a> over-rides this.
+
+=item -d | --dirs
+
+If a directory name is given on the command line show its metadata, not
+its contents.
+
+FIXME weirdness with -R
+
+=item -r | --reverse
+
+Reverse sort order
+
+=item -t | --time
+
+Sort output by modified-time
+
+=item -S | --size
+
+Sort output by size
+
+=item -R | --recurse
+
+Recurse into sub-directories. The output is very different from what C<ls> does.
+Compare:
+
+    $ ls -lR a
+    total 0
+    drwxr-xr-x  3 david  staff  102  2 Jul 12:44 b
+    
+    a/b:
+    total 0
+    drwxr-xr-x  3 david  staff  102  2 Jul 12:44 c
+    
+    a/b/c:
+    total 0
+    drwxr-xr-x  2 david  staff  68  2 Jul 12:44 d
+    
+    a/b/c/d:
+
+and:
+
+    $ lls -lR a
+    drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44    a
+    drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44    └─ b
+    drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44      └─ c
+    drwxr-xr-x  2  david  staff   68 B 02 Jul 12:44          └─ d
+
+=item -g | --git (not yet implemented)
+
+Include information on files' git status.
+
+=item --noicons
+
+Suppress icons output. Incompatible with C<--show_icons>.
+
+=item -7 | --ascii
+
+Suppress non-ASCII output. Implies C<--noicons>. If you ask for recursive
+output the tree will be rendered in ASCII.
+
+=item -H | --HELP (all caps)
+
+Show more help
+
+=back
+
+=head1 DISPLAY OPTIONS
+
+The default with no options is to show files' icons and names in one long
+list. With the
+C<-l> option you get permissions, number of links, owner, group, size,
+date/time, icons, and names. With the C<-R> option a tree will be added,
+and with the C<-g> option git info will be added.
+
+But it's a lot more configurable than that. If any of the following options
+are present then all of the other display options will be turned off and C<-l>
+will have no effect:
+
+=over
+
+=item --show_icons
+
+Show the icons for a file
+
+=item --show_filename
+
+Show the filename
+
+=item --show_perms
+
+Show the read/write/execute permissions and file type
+
+=item --show_links
+
+Show the number of links to the file
+
+=item --show_owner
+
+Show the file's owner
+
+=item --show_group
+
+Show the file's group
+
+=item --show_size
+
+Show the file's size. NB that this is shown as the number of
+bytes/KiB/MiB/GiB/TiB.
+
+=item --show_date
+
+Show the file's last modified date/time.
+
+=back
+
+=head1 FILES
+
+Default arguments will be read from C<~/.config/lls/args> if it exists.
