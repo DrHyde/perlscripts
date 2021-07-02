@@ -20,40 +20,50 @@ use POSIX qw(strftime);
 # font cheat sheet: https://www.nerdfonts.com/cheat-sheet
 
 GetOptions(
-    'l'        => \my $opt_l,
-    'a'        => \my $opt_a,
-    'A'        => \my $opt_A,
-    'd'        => \my $opt_d,
-    'r'        => \my $opt_r,
-    't'        => \my $opt_t,
-    'S'        => \my $opt_S,
-    'R'        => \my $opt_R,
+    'l'        => \my $opt_long,
+    'a'        => \my $opt_all,
+    'A'        => \my $opt_hiddenfiles,
+    'd'        => \my $opt_directories,
+    'r'        => \my $opt_reverse,
+    't'        => \my $opt_time,
+    'S'        => \my $opt_size,
+    'R'        => \my $opt_recurse,
     'git|g'    => \my $opt_git, # FIXME NYI
     'help|h|?' => \my $help,    # FIXME NYI
 );
-$opt_l++ if($opt_git);
+$opt_long++ if($opt_git);
 my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
 
 if($help) { pod2usage(0) }
 
+my @output_lines;
 my @last;
 work_on(0, @targets);
+
+my $format = $opt_long ? "%s %3d %s %s %4d %s %12s %s%s %s%s%s" : "%s %s";
+foreach my $line (@output_lines) {
+    if(!ref($line)) {
+        say $line;
+    } else {
+        say sprintf($format, @{$line});
+    }
+}
 
 sub work_on ($depth, @targets) {
     my $have_already_rendered;
     my $prev_rendered_was_dir;
     foreach my $target (@targets) {
-        if(-d $target && !$opt_d) {
+        if(-d $target && !$opt_directories) {
             if($#targets > 0) {
-                print "\n" if($have_already_rendered);
-                print "$target:\n";
+                push @output_lines, "" if($have_already_rendered);
+                push @output_lines, "$target:";
             }
     
-            if($opt_R && !$depth) {
-                $opt_R = 0;
-                print render(0, $target);
-                $opt_R = 1;
+            if($opt_recurse && !$depth) {
+                $opt_recurse = 0;
+                push @output_lines, build_data(0, $target);
+                $opt_recurse = 1;
             }
             cd $target => sub {
                 $prev_rendered_was_dir = 1;
@@ -62,47 +72,46 @@ sub work_on ($depth, @targets) {
                 while(@dirents) {
                     my $dirent = shift(@dirents);
                     $last[$depth] = !@dirents;
-                    next if($dirent =~ /^\.\.?$/ && ($depth + 1 || !$opt_a));
-                    next if($dirent =~ /^\./     && !($opt_a || $opt_A));
+                    next if($dirent =~ /^\.\.?$/ && ($depth + 1 || !$opt_all));
+                    next if($dirent =~ /^\./     && !($opt_all || $opt_hiddenfiles));
     
-                    print render($depth, $dirent);
+                    push @output_lines, build_data($depth, $dirent);
                     work_on($depth + 1, $dirent)
-                        if($opt_R && !-l $dirent && -d $dirent && $dirent ne '.git')
+                        if($opt_recurse && !-l $dirent && -d $dirent && $dirent ne '.git')
                 }
                 closedir($dh);
             };
         } else {
-            print "\n" if($prev_rendered_was_dir);
-            print render($depth, $target);
+            push @output_lines, "" if($prev_rendered_was_dir);
+            push @output_lines, render($depth, $target);
             $prev_rendered_was_dir = 0;
         }
         $have_already_rendered = 1;
     }
 }
 
-sub render ($depth, $dirent) {
+sub build_data ($depth, $dirent) {
     my $icons    = get_icons(abs_path('.')."/$dirent");
     my $filename = get_rendered_filename($dirent);
-    if(!$opt_l) {
-        return sprintf("%s %s\n", $icons, $filename);
+    if(!$opt_long) {
+        return [$icons, $filename];
     } else {
-        return sprintf(
-            "%s %3d %s %s %4d %s %12s %s%s %s%s%s\n",
-            format_mode((lstat($dirent))[2]),
-            (lstat($dirent))[3], # links
-            (getpwuid((lstat($dirent))[4]))[0], # user
-            (getgrgid((lstat($dirent))[5]))[0], # group
-            format_size((lstat($dirent))[7]), # size
+        return [
+            format_mode(cached_stat($dirent)->[2]),
+            cached_stat($dirent)->[3], # links
+            (getpwuid(cached_stat($dirent)->[4]))[0], # user
+            (getgrgid(cached_stat($dirent)->[5]))[0], # group
+            format_size(cached_stat($dirent)->[7]), # size
             strftime(
-                (time - (lstat($dirent))[9] < 60*60*24*365/2 ? "%d %b %H:%M" : "%d %b  %Y"),
-                (localtime((lstat($dirent))[9]))[0 .. 5]
+                (time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" : "%d %b  %Y"),
+                (localtime(cached_stat($dirent)->[9]))[0 .. 5]
             ),
             $icons,
             ($opt_git ? " --" : ''),
-            ($opt_R ? format_tree_art($depth) : ''),
+            ($opt_recurse ? format_tree_art($depth) : ''),
             $filename,
             (-l $dirent ? " -> ".readlink($dirent) : '')
-        );
+        ];
     }
 }
 
@@ -161,19 +170,27 @@ sub sortfiles (@files) {
        $sorter->($a, $b) || ($a cmp $b)
     } @files;
     
-    if($opt_r) { return reverse @files }
+    if($opt_reverse) { return reverse @files }
      else { return @files }
 }
 
 sub sorter {
     no warnings 'uninitialized';
-    $opt_t ? sub ($l, $r) {
-                 ((lstat($r))[9] || ~0) <=> ((lstat($l))[9] || ~0)
+    $opt_time ? sub ($l, $r) {
+                 (cached_stat($r)->[9] || ~0) <=> (cached_stat($l)->[9] || ~0)
              } :
-    $opt_S ? sub ($l, $r) {
-                 ((lstat($r))[7]) <=> ((lstat($l))[7])
+    $opt_size ? sub ($l, $r) {
+                 (cached_stat($r)->[7]) <=> (cached_stat($l)->[7])
              } :
              sub { 0 }
+}
+
+my %stat_cache;
+sub cached_stat ($filename) {
+    $filename = abs_path('.')."/$filename";
+
+    return $stat_cache{$filename} if(exists($stat_cache{$filename}));
+    return $stat_cache{$filename} = [lstat($filename)];
 }
 
 sub get_rendered_filename ($filename) {
