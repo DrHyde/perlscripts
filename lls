@@ -14,6 +14,7 @@ use Pod::Usage;
 use Cwd qw(abs_path);
 use File::Basename;
 use File::cd;
+use File::Slurper qw(read_text);
 use POSIX qw(strftime);
 
 # this requires nerd-fonts, and proper terminal configuation
@@ -22,6 +23,10 @@ use POSIX qw(strftime);
 my %opt_show = map { $_ => 0 } qw(
     perms links owner group size date icons filename
 );
+if(open(my $default_args_file, '<', "$ENV{HOME}/.config/lls/args")) {
+    (my $opts = join(' ', <$default_args_file>)) =~ s/^\s+|\s+$//g;
+    unshift(@ARGV, split(/\s+/, $opts));
+}
 GetOptions(
     'long|l'    => \my $opt_long,
     'all|a'     => \my $opt_all,
@@ -33,6 +38,7 @@ GetOptions(
     'recurse|R' => \my $opt_recurse,
     'git|g'     => \my $opt_git, # FIXME NYI
     'ascii|7'   => \my $opt_ascii,
+    'utf8|8'    => \my $opt_utf8,
     'noicons'   => \my $opt_noicons,
     'help|h|?'  => \my $help,
     'HELP|H'    => \my $HELP,
@@ -47,6 +53,7 @@ GetOptions(
     show_size     => \$opt_show{size},
     show_date     => \$opt_show{date},
 );
+$opt_ascii   = 0 if($opt_utf8);
 $opt_noicons = 1 if($opt_ascii);
 
 if($opt_noicons && $opt_show{icons}) {
@@ -448,6 +455,11 @@ Suppress icons output. Incompatible with C<--show_icons>.
 
 Suppress non-ASCII output. Implies C<--noicons>. If you ask for recursive
 output the tree will be rendered in ASCII.
+
+=item -8 | --utf8
+
+Use Unicode (encoded as utf-8) for output. This is the default. Over-rides any
+C<--ascii>, and does so before that has a chance to suppress icons.
 
 =item -H | --HELP (all caps)
 
