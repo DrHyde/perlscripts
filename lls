@@ -74,7 +74,7 @@ $opt_show{tree}  = $opt_recurse;
 $opt_show{icons} = 0 if($opt_noicons);
 
 @ignore = map { s/\/+$//r } map {
-    $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : ()
+    $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : $_
 } @ignore;
 
 my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
