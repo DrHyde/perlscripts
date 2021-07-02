@@ -282,6 +282,7 @@ sub get_colourized_filename ($filename) {
 sub get_icon_type_specific {
     my $filename = basename(shift());
     (my $ext = $filename) =~ s/^.*\.//;
+    $ext = '' if($ext eq $filename);
     return
         $filename eq 'cpanfile'                 ? 'tree'   :
         $ext      eq 'c'                              ? 'c'      :
