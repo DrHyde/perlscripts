@@ -26,6 +26,7 @@ my %opt_show = map { $_ => 0 } qw(
 if(open(my $default_args_file, '<', "$ENV{HOME}/.config/lls/args")) {
     (my $opts = join(' ', <$default_args_file>)) =~ s/^\s+|\s+$//g;
     unshift(@ARGV, split(/\s+/, $opts));
+    close($default_args_file);
 }
 GetOptions(
     'long|l'     => \my $opt_long,
@@ -164,7 +165,7 @@ sub work_on ($depth, @targets) {
 }
 
 sub build_data ($depth, $dirent) {
-    my $icons    = get_icons(abs_path('.')."/$dirent");
+    my $icons    = get_icons($dirent =~ /^\// ? $dirent : abs_path('.')."/$dirent");
     my $filename = get_colourized_filename($dirent);
 
     return [
@@ -261,7 +262,7 @@ sub sorter {
 
 my %stat_cache;
 sub cached_stat ($filename) {
-    $filename = abs_path('.')."/$filename";
+    $filename = $filename =~ /^\// ? $filename : abs_path('.')."/$filename";
 
     return $stat_cache{$filename} if(exists($stat_cache{$filename}));
     return $stat_cache{$filename} = [lstat($filename)];
