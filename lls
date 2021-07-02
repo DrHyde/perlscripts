@@ -28,20 +28,21 @@ if(open(my $default_args_file, '<', "$ENV{HOME}/.config/lls/args")) {
     unshift(@ARGV, split(/\s+/, $opts));
 }
 GetOptions(
-    'long|l'    => \my $opt_long,
-    'all|a'     => \my $opt_all,
-    'hidden|A'  => \my $opt_hidden,
-    'dirs|d'    => \my $opt_dirs,
-    'reverse|r' => \my $opt_reverse,
-    'time|t'    => \my $opt_time,
-    'size|S'    => \my $opt_size,
-    'recurse|R' => \my $opt_recurse,
-    'git|g'     => \my $opt_git, # FIXME NYI
-    'ascii|7'   => \my $opt_ascii,
-    'utf8|8'    => \my $opt_utf8,
-    'noicons'   => \my $opt_noicons,
-    'help|h|?'  => \my $help,
-    'HELP|H'    => \my $HELP,
+    'long|l'     => \my $opt_long,
+    'all|a'      => \my $opt_all,
+    'hidden|A'   => \my $opt_hidden,
+    'dirs|d'     => \my $opt_dirs,
+    'reverse|r'  => \my $opt_reverse,
+    'time|t'     => \my $opt_time,
+    'size|S'     => \my $opt_size,
+    'recurse|R'  => \my $opt_recurse,
+    'git|g'      => \my $opt_git, # FIXME NYI
+    'ascii|7'    => \my $opt_ascii,
+    'utf8|8'     => \my $opt_utf8,
+    'ignore|I=s' => \my @ignore,
+    'noicons'    => \my $opt_noicons,
+    'help|h|?'   => \my $help,
+    'HELP|H'     => \my $HELP,
     # defaults
     show_icons    => \$opt_show{icons},
     show_filename => \$opt_show{filename},
@@ -70,6 +71,10 @@ if(!grep { $_ } values(%opt_show)) {
 $opt_show{git}   = $opt_git;
 $opt_show{tree}  = $opt_recurse;
 $opt_show{icons} = 0 if($opt_noicons);
+
+@ignore = map { s/\/+$//r } map {
+    $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : ()
+} @ignore;
 
 my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
@@ -129,7 +134,14 @@ sub work_on ($depth, @targets) {
             cd $target => sub {
                 $prev_rendered_was_dir = 1;
                 opendir(my $dh, '.') || die("Couldn't read $target: $!\n");
-                my @dirents = sortfiles(readdir($dh));
+                my @dirents = grep {
+                    my $candidate = $_;
+                    !grep {
+                        $candidate eq $_                        ||
+                        abs_path('.')."/$candidate" eq $_       ||
+                        ($_ =~ /^\./ && $candidate =~ /\Q$_\E/)
+                    } @ignore
+                } sortfiles(readdir($dh));
                 while(@dirents) {
                     my $dirent = shift(@dirents);
                     $last[$depth] = !@dirents;
@@ -396,6 +408,20 @@ begin with a dot.
 =item -A | --hidden
 
 Show all directory entries except C<.> and C<..>. C<-a> over-rides this.
+
+=item -I | --ignore FILE
+
+Takes an argument, the name of a file to ignore. That file will not be
+listed, including if a file with that name exists in a subdir and C<-R>
+is in effect. To only ignore a specific file and not any other files with
+the same name provide its fully qualified absolute path. If FILE begins with
+a dot then any file with that extension will be ignored.
+
+This option can be supplied many times.
+
+As a special case, you can pass C<-I $FIGNORE> (that's the literal string
+'$FIGNORE' - you'll probably have to escape the dollar sign). That will ignore
+everything in the C<FIGNORE> environment variable.
 
 =item -d | --dirs
 
