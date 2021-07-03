@@ -269,9 +269,9 @@ sub cached_stat ($filename) {
 }
 
 sub get_colourized_filename ($filename) {
-    state $ls_command = `ls --version 2>/dev/null`
-        ? 'ls -d --color=always'
-        : 'CLICOLOR_FORCE=1 ls -dG';
+    state $ls_command = `ls --version 2>/dev/null` ? 'ls -d --color=always' :
+                        `uname` =~ /Darwin/        ? 'CLICOLOR_FORCE=1 ls -dG' :
+                                                     'ls -d';
 
     my $rendered_filename = -t STDOUT 
         ? `$ls_command "$filename"`
