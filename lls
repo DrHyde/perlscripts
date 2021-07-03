@@ -23,10 +23,15 @@ use POSIX qw(strftime);
 my %opt_show = map { $_ => 0 } qw(
     perms links owner group size date icons filename
 );
-if(open(my $default_args_file, '<', "$ENV{HOME}/.config/lls/args")) {
-    (my $opts = join(' ', <$default_args_file>)) =~ s/^\s+|\s+$//g;
-    unshift(@ARGV, split(/\s+/, $opts));
-    close($default_args_file);
+foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
+    "args",
+    "${^O}_args"
+) {
+    if(open(my $default_args_file, '<', $args_file)) {
+        (my $opts = join(' ', <$default_args_file>)) =~ s/^\s+|\s+$//g;
+        unshift(@ARGV, split(/\s+/, $opts));
+        close($default_args_file);
+    }
 }
 GetOptions(
     'long|l'     => \my $opt_long,
@@ -547,3 +552,5 @@ Show the file's last modified date/time.
 =head1 FILES
 
 Default arguments will be read from C<~/.config/lls/args> if it exists.
+Platform-specific arguments will be read from C<~/.config/lls/${platform}_args>
+if it exists.
