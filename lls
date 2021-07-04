@@ -402,7 +402,14 @@ sub get_icon_type_specific {
 
 sub get_icon_type_generic ($filename) {
     return
-        -l $filename ? 'link'     :  # must be first
+        -l $filename ? ( do {
+            my $target = readlink($filename);
+            my $target_type = get_icon_type_generic($target);
+            !-e $target                     ? 'linkbroken' :
+            $target_type eq 'dir'           ? 'linkdir'  :
+            $target_type =~ /^(file|exec)$/ ? 'linkfile' :
+                                              'link'
+        } ) :
         -d $filename ? 'dir'      :
         -x $filename ? 'exec'     :
         -f $filename ? 'file'     :
@@ -417,15 +424,6 @@ sub get_icons ($filename) {
     my $generic  = get_icon_type_generic($filename);
     my $specific = get_icon_type_specific($filename);
 
-    if($generic eq 'link') {
-        my $target = readlink($filename);
-        if(!-e $target) {
-            $generic .= 'broken'
-        } else {
-            my $target_type = get_icon_type_generic($target);
-            $generic .= $target_type =~ /^(file|dir)$/ ? $target_type : '';
-        }
-    }
     state $map = {
         test       => '',
         text       => '',
@@ -513,7 +511,7 @@ If you are not using iTerm on a Mac then you are computering wrong.
 Turns on all the available columns. Without any other options this will be the
 same as C<ls -l> but with an extra column of icons before the filenames.
 
-See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES">.
+See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES AND ICONS">.
 
 =item -a | --all
 
@@ -642,7 +640,7 @@ will have no effect:
 Show the icons for a file. There will always be at least one icon, and
 sometimes two.
 
-See L</"FILE TYPES"> for more details.
+See L</"FILE TYPES AND ICONS"> for more details.
 
 =item --show_name
 
@@ -675,28 +673,32 @@ Show the file's last modified date/time.
 
 =back
 
-=head1 FILE TYPES
+=head1 FILE TYPES AND ICONS
 
-File types are used to divine what icons to show for a file. The first is determined
-by whether the file is a symlink (and if it is whether it is a link to a file, a directory,
-something else, or is broken), a directory, an executable file, any other kind of file,
-a pipe, a socket, a block device, or a character device:
+File types and icon type maps are used to divine what icons to show for a file.
 
-    link           
-    link (broken)  
-    link (dir)     
-    link (file)    
-    dir            
-    executable     
-    other file     
-    pipe           ﳣ
-    socket         ﳦ
-    blockdev       
-    chardev        
+The first icon is determined by whether the file is a symlink (and if it is
+whether it is a link to a file, a directory, something else, or is broken), a
+directory, an executable file, any other kind of file, a pipe, a socket, a
+block device, or a character device. These type names and their default icons
+are shown below:
 
-The second is (mostly) determined based on the filename or file extension. There are
-some vaguely sensible defaults built in, but you can control them using the following
-command line arguments.
+    link         
+    linkbroken   
+    linkdir      
+    linkfile     
+    dir          
+    executable   
+    file         
+    pipe         ﳣ
+    socket       ﳦ
+    blockdev     
+    chardev      
+
+The second icon is determined based on the filename, file extension, or whether
+a directory contains a particular filename. There are some vaguely sensible
+defaults built in, but you can control them using the following command line
+arguments.
 
 =over
 
@@ -704,12 +706,14 @@ command line arguments.
 
 map files with extension EXTENSION to type TYPE, unless the file's entire name
 matches something specified using C<--name_type>. If this is specified all the
-defaults are turned off unless you explicitly turn them back on.
+defaults are turned off unless you explicitly turn them back on. Can be used
+multiple times.
 
 =item --name_type FILENAME TYPE
 
 map files with name FILENAME to type TYPE. If this is specified all the
-defaults are turned off unless you explicitly turn them back on.
+defaults are turned off unless you explicitly turn them back on. Can be used
+multiple times.
 
 If the FILENAME begins with a C</> then the type will only be applied to directories
 with that name.
@@ -722,6 +726,27 @@ to directories that contain a file with that name.
 Turn on all the defaults.
 
 =item --show_default_types
+
+Spit out all the defaults and immediately exit.
+
+=back
+
+You can control which icons are associated with each type thus (not yet implemented):
+
+=over
+
+=item --icon_type TYPE ICON
+
+map any file with type TYPE to icon ICON. If this is specified all the defaults
+are turned off unless you explicitly turn them back on. Can be used multiple times.
+ICON should be a single character, and the display will go all wibbly if it isn't
+a single width character. However, no checks are made in this regard.
+
+=item --default_icons
+
+Turn on all the defaults
+
+=item --show_default_icons
 
 Spit out all the defaults and immediately exit.
 
