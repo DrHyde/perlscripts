@@ -296,7 +296,7 @@ sub build_data ($depth, $dirent) {
             (localtime(cached_stat($dirent)->[9]))[0 .. 5]
         ) : (),
         $opt_show{icons}    ? $icons : (),
-        $opt_show{git}      ? "--" : (),
+        $opt_show{git}      ? format_git($dirent) : (),
         $opt_show{tree}     ? (
             $opt_recurse ? format_tree_art($depth) : ''
         ) : (),
@@ -305,6 +305,50 @@ sub build_data ($depth, $dirent) {
         ) : (),
     ];
 }
+
+my %git_cache;
+sub format_git ($dirent) {
+    my $what_to_check = $dirent =~ /^\// ? $dirent : abs_path('.');
+    $git_cache{$what_to_check} ||= `git status -s --ignored=matching 2>/dev/null`;
+    return '  ' if(!$git_cache{$what_to_check});
+
+    # The runes mean:
+    #   X          Y     Meaning
+    #   -------------------------------------------------
+    #            [AMD]   not updated
+    #   M        [ MD]   updated in index
+    #   A        [ MD]   added to index
+    #   D                deleted from index
+    #   R        [ MD]   renamed in index
+    #   C        [ MD]   copied in index
+    #   [MARC]           index and work tree matches
+    #   [ MARC]     M    work tree changed since index
+    #   [ MARC]     D    deleted in work tree
+    #   [ D]        R    renamed in work tree
+    #   [ D]        C    copied in work tree
+    #   -------------------------------------------------
+    #   D           D    unmerged, both deleted
+    #   A           U    unmerged, added by us
+    #   U           D    unmerged, deleted by them
+    #   U           A    unmerged, added by them
+    #   D           U    unmerged, deleted by us
+    #   A           A    unmerged, both added
+    #   U           U    unmerged, both modified
+    #   -------------------------------------------------
+    #   ?           ?    untracked
+    #   !           !    ignored
+
+    my %git_info = map {
+        substr($_, 3) => substr($_, 0, 1) . substr($_, 1, 1)
+    } split(/\n/, $git_cache{$what_to_check});
+    return $git_info{$dirent} if(exists($git_info{$dirent}));
+
+    # FIXME make this examine child nodes
+    if(-d $dirent) { return 'XX' }
+
+    return '  ';
+}
+
 
 sub format_tree_art ($depth) {
     my $art = '';
