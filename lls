@@ -12,6 +12,7 @@ use experimental qw(signatures);
 
 use Data::Dumper::Concise;
 use Getopt::Long;
+Getopt::Long::Configure(qw(no_ignore_case));
 use Pod::Usage;
 
 use Cwd qw(abs_path getcwd);
@@ -256,7 +257,7 @@ sub work_on ($depth, @targets) {
                 while(@dirents) {
                     my $dirent = shift(@dirents);
                     $last[$depth] = !@dirents;
-                    next if($dirent =~ /^\.\.?$/ && ($depth + 1 || !$opt_all));
+                    next if($dirent =~ /^\.\.?$/ && (($opt_recurse && $depth + 1) || !$opt_all));
                     next if($dirent =~ /^\./     && !($opt_all || $opt_hidden));
     
                     push @output_lines, build_data($depth, $dirent);
@@ -468,6 +469,7 @@ sub default_icon_types {
         c          => '',
         'c++'      => '',
         ci         => '',
+        data       => '',
         git        => '',
         golang     => '',
         haskell    => '',
@@ -495,11 +497,12 @@ sub default_file_types {
         ext  => {
             'c++'      => ['cpp'],
             c          => [qw(c h)],
+            data       => [qw(yml json)],
             golang     => [qw(go)],
             haskell    => [qw(hs)],
             html       => [qw(htm html)], 
             java       => [qw(java)],
-            javascript => [qw(js json)],
+            javascript => [qw(js)],
             lisp       => [qw(lsp lisp el elc)],
             lock       => ['lock'],
             object     => [qw(bs o)],
