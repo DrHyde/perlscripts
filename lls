@@ -1,5 +1,8 @@
 #!/usr/bin/env perl
 
+# this requires nerd-fonts, and proper terminal configuation
+# font cheat sheet: https://www.nerdfonts.com/cheat-sheet
+
 use 5.012;
 use strict;
 use warnings;
@@ -7,22 +10,17 @@ use utf8;
 use open ":std", ":encoding(UTF-8)";
 use experimental qw(signatures);
 
+use Data::Dumper::Concise;
 use Getopt::Long;
-Getopt::Long::Configure('bundling');
 use Pod::Usage;
 
-use Cwd qw(abs_path);
+use Cwd qw(abs_path getcwd);
 use File::Basename;
 use File::cd;
 use File::Slurper qw(read_text);
 use POSIX qw(strftime);
 
-# this requires nerd-fonts, and proper terminal configuation
-# font cheat sheet: https://www.nerdfonts.com/cheat-sheet
-
-my %opt_show = map { $_ => 0 } qw(
-    perms links owner group size date icons name
-);
+# read defaults from ~/.config/lls/*
 foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
     "args",
     "${^O}_args"
@@ -33,10 +31,35 @@ foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
         close($default_args_file);
     }
 }
+
+# implement bundling of single char args like -lAR. While Getopt::Long can
+# optionally do this it's incompatible with `--foo bar baz` style multi-arg
+# opts
+my @new_argv = ();
+while(@ARGV) {
+    my $this_arg = shift(@ARGV);
+    if($this_arg eq '--') {
+        push @new_argv, $this_arg, @ARGV;
+        last;
+    } elsif($this_arg =~ /^-[^-]/) {
+        my @unbundled = split('', $this_arg);
+        push @new_argv, map { "-$_" } @unbundled[1 .. $#unbundled];
+    } else {
+        push @new_argv, $this_arg;
+    }
+}
+@ARGV = @new_argv;
+
+# finally after all that throat-clearing we can parse the command line.
+# first, die on errors
 $SIG{__WARN__} =sub {
     die(@_, "\nTry -h for help\n") if($_[0] =~ /^Unknown option: /);
     warn(@_);
 };
+# make sure these exist so we can reference them
+my %opt_show = map { $_ => 0 } qw(
+    perms links owner group size date icons name
+);
 GetOptions(
     'long|l'     => \my $opt_long,
     'all|a'      => \my $opt_all,
@@ -51,6 +74,8 @@ GetOptions(
     'ascii|7'    => \my $opt_ascii,
     'utf8|8'     => \my $opt_utf8,
     'ignore|I=s' => \my @opt_ignore,
+    'iso8601'    => \my $opt_iso8601,
+    'noiso8601'  => \my $opt_noiso8601,
     'noicons'    => \my $opt_noicons,
     'help|h|?'   => \my $help,
     'HELP|H'     => \my $HELP,
@@ -64,13 +89,41 @@ GetOptions(
     show_group => \$opt_show{group},
     show_size  => \$opt_show{size},
     show_date  => \$opt_show{date},
+    # type maps
+    'ext_type=s{2}'  => \my @opt_ext_types,
+    'name_type=s{2}' => \my @opt_name_types,
+    'default_types'  => \my $opt_default_types,
+    'show_default_types' => \my $opt_show_default_types,
 );
+
+# now post-process args
+
+# first, with these we can just spit some output and stop
+if($help) { pod2usage(0) }
+if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
+if($opt_show_default_types) {
+    my %defaults = default_opt_types();
+    foreach my $name_part (keys %defaults) {
+        foreach my $type (keys %{$defaults{$name_part}}) {
+            foreach my $name (@{$defaults{$name_part}->{$type}}) {
+                say "--${name_part}_type $type $name";
+            }
+        }
+    }
+    exit(0);
+}
+
+# some things imply other things
 $opt_ascii   = 0 if($opt_utf8);
 $opt_noicons = 1 if($opt_ascii);
+$opt_iso8601 = 0 if($opt_noiso8601);
 
+# some options are incompatible with each other
 if($opt_noicons && $opt_show{icons}) {
     die "\n--noicons and --show_icons makes no sense\n\n";
 }
+
+# defaults for which columns to display
 if(!grep { $_ } values(%opt_show)) {
     # the user didn't set any of these so we can
     if($opt_long) {
@@ -79,25 +132,45 @@ if(!grep { $_ } values(%opt_show)) {
         @opt_show{qw(icons name)} = (1, 1);
     }
 }
+# these columns are controlled by other args
 $opt_show{git}   = $opt_git;
 $opt_show{tree}  = $opt_recurse;
 $opt_show{icons} = 0 if($opt_noicons);
 
+# transmogrify the lists of {name,ext}/type pairs into a more
+# useful data structure
+my %opt_type;
+if(!@opt_ext_types && !@opt_name_types) {
+    %opt_type = default_opt_types();
+} else {
+    if($opt_default_types) { %opt_type = default_opt_types(); }
+    while(@opt_name_types) {
+        my($name, $type) = splice(@opt_name_types, 0, 2);
+        $opt_type{name}->{$type} ||= [];
+        push @{$opt_type{name}->{$type}}, $name;
+    }
+    while(@opt_ext_types) {
+        my($ext, $type) = splice(@opt_ext_types, 0, 2);
+        $opt_type{ext}->{$type} ||= [];
+        push @{$opt_type{ext}->{$type}}, $ext;
+    }
+}
+
+# clean up trailing / and multiple // in --ignore and --norecurse,
+# and parse $FIGNORE
 @opt_ignore = map { s/\/+$//; s/\/+/\//rg } map {
     $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : $_
 } @opt_ignore;
 @opt_no_recurse = map { s/\/+$//; s/\/+/\//rg } @opt_no_recurse;
 
+# finally, we're ready to go
 my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
-
-if($help) { pod2usage(0) }
-if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
-
 my @output_lines;
 my @last;
 work_on(0, @targets);
 
+# some columns have variable width, we need to figure out how much is needed
 my @line_max_sizes = ();
 foreach my $line (grep { ref($_) } @output_lines) {
     foreach my $index (1, 2, 3) {
@@ -107,17 +180,16 @@ foreach my $line (grep { ref($_) } @output_lines) {
         )
     }
 }
-my $format = '';
-$format .= $opt_show{perms}    ? '%s' : '';
-$format .= $opt_show{links}    ? ' %'.($line_max_sizes[1] + 1).'d' : '';
-$format .= $opt_show{owner}    ? ' %'.($line_max_sizes[2] + 1).'s' : '';
-$format .= $opt_show{group}    ? ' %'.($line_max_sizes[3] + 1).'s' : '';
-$format .= $opt_show{size}     ? ' %6s'  : '';
-$format .= $opt_show{date}     ? ' %12s' : '';
-$format .= $opt_show{icons}    ? ' %s'   : '';
-$format .= $opt_show{git}      ? ' %s'   : '';
-$format .= $opt_show{tree}     ? '%s'    : ''; # no space cos tree art always has one
-$format .= $opt_show{name}  ? ' %s'   : '';
+my $format = $opt_show{perms} ? '%s' : '';
+$format   .= $opt_show{links} ? ' %'.($line_max_sizes[1] + 1).'d' : '';
+$format   .= $opt_show{owner} ? ' %'.($line_max_sizes[2] + 1).'s' : '';
+$format   .= $opt_show{group} ? ' %'.($line_max_sizes[3] + 1).'s' : '';
+$format   .= $opt_show{size}  ? ' %6s' : '';
+$format   .= $opt_show{date}  ? ' %s'  : '';
+$format   .= $opt_show{icons} ? ' %s'  : '';
+$format   .= $opt_show{git}   ? ' %s'  : '';
+$format   .= $opt_show{tree}  ? '%s'   : ''; # no space cos tree art always has one
+$format   .= $opt_show{name}  ? ' %s'  : '';
 $format =~ s/^ //;
 
 foreach my $line (@output_lines) {
@@ -194,7 +266,10 @@ sub build_data ($depth, $dirent) {
         $opt_show{group}    ? (getgrgid(cached_stat($dirent)->[5]))[0] : (),
         $opt_show{size}     ? format_size(cached_stat($dirent)->[7]) : (),
         $opt_show{date}     ? strftime(
-            (time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" : "%d %b  %Y"),
+            ( $opt_iso8601                                      ? '%Y-%m-%d %H:%M' :
+              time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" :
+                                                                  "%d %b  %Y"
+            ),
             (localtime(cached_stat($dirent)->[9]))[0 .. 5]
         ) : (),
         $opt_show{icons}    ? $icons : (),
@@ -300,27 +375,29 @@ sub get_colourized_filename ($filename) {
 }
 
 sub get_icon_type_specific {
-    my $filename = basename(shift());
+    my $original_filename = shift();
+    my $filename = basename($original_filename);
     (my $ext = $filename) =~ s/^.*\.//;
     $ext = '' if($ext eq $filename);
-    return
-        $filename eq 'cpanfile'                 ? 'tree'   :
-        $ext      eq 'c'                              ? 'c'      :
-        $ext      eq 'cpp'                            ? 'c++'    :
-        $ext      eq 'h'                              ? 'header' :
-        $ext      eq 't'                              ? 'test'   :
-        $ext      eq 'txt'                            ? 'text'   :
-        $ext      eq 'swp'                            ? 'vim'    :
-        $ext      eq 'lock'                           ? 'lock'   :
-        $filename =~ /^Makefile(\.PL)?$/          ? 'tree'   :
-        $filename =~ /^\.git(hub|ignore)?$/       ? 'git'    :
-        $filename =~ /^\.(Apple(DB|Double)|DS_Store)$/ ? 'apple'  :
-        $filename =~ /^\.(appveyor|cirrus)\.yml$/ ? 'ci'     :
-        $filename =~ /^change(s|log)$/i           ? 'list'   :
-        $filename =~ /^MANIFEST(\.SKIP)?$/        ? 'list'   :
-        $filename =~ /\.(xs|p[lm]|PL)$/                  ? 'perl'   :
-        $filename =~ /\.(bs|o)$/                         ? 'object' :
-                                                           '';
+    return (
+        ( grep {
+            my $type = $_;
+            grep {
+                $_ eq $filename ||
+                ( -d $filename && $_ eq "/$filename") ||
+                (
+                    -d $original_filename &&
+                    /^\/\// &&
+                    -e "$original_filename/".(s/^\/\///r)
+                )
+            } @{$opt_type{name}->{$type}};
+        } keys %{$opt_type{name}} ),
+        ( grep {
+            my $type = $_;
+            grep { $_ eq $ext } @{$opt_type{ext}->{$type}};
+        } keys %{$opt_type{ext}} ),
+        ''
+    )[0];
 }
 
 sub get_icon_type_generic ($filename) {
@@ -338,14 +415,7 @@ sub get_icon_type_generic ($filename) {
 
 sub get_icons ($filename) {
     my $generic  = get_icon_type_generic($filename);
-    my $specific = get_icon_type_specific($filename) || (
-        ($generic eq 'dir'  && basename($filename) eq 't'         ) ? 'test'   :
-        ($generic eq 'dir'  && basename($filename) eq 'bin'       ) ? 'exec'   :
-        ($generic eq 'dir'  && basename($filename) eq 'blib'      ) ? 'object' :
-        ($generic eq 'file' && basename($filename) eq 'pm_to_blib') ? 'object' :
-        ($generic eq 'dir'  && -d "$filename/.git"                ) ? 'git'    :
-                                                                     ''
-    );
+    my $specific = get_icon_type_specific($filename);
 
     if($generic eq 'link') {
         my $target = readlink($filename);
@@ -366,7 +436,6 @@ sub get_icons ($filename) {
         vim        => '',
         c          => '',
         'c++'      => '',
-        header     => '',
         object     => '',
         git        => '',
         ci         => '',
@@ -386,6 +455,31 @@ sub get_icons ($filename) {
         ''         => ' ',
     };
     return join(' ', $map->{$generic}, $map->{$specific});
+}
+
+sub default_opt_types {
+    ( 
+        ext  => {
+            c     => [qw(c h)],
+            'c++' => ['cpp'],
+            test  => ['t'],
+            text  => ['txt'],
+            vim   => ['swp'],
+            lock  => ['lock'],
+            perl  => [qw(pl pm PL xs)],
+            object => [qw(bs o)],
+        },
+        name => {
+            test   => [qw(/t)],
+            exec   => [qw(/bin)],
+            object => [qw(/blib)],
+            tree   => [qw(cpanfile Makefile Makefile.PL)],
+            git    => [qw(.github .gitignore .git //.git)],
+            apple  => [qw(.AppleDB .AppleDouble .DS_Store)],
+            ci     => [qw(.appveyor.yml .cirrus.yml)],
+            list   => [qw(MANIFEST MANIFEST.SKIP CHANGES CHANGELOG Changes Changelog)],
+        }
+    )
 }
 
 =encoding utf8
@@ -419,7 +513,7 @@ If you are not using iTerm on a Mac then you are computering wrong.
 Turns on all the available columns. Without any other options this will be the
 same as C<ls -l> but with an extra column of icons before the filenames.
 
-See also L</"DISPLAY OPTIONS">.
+See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES">.
 
 =item -a | --all
 
@@ -505,6 +599,14 @@ Include information on files' git status.
 
 Suppress icons output. Incompatible with C<--show_icons>.
 
+=item --iso8601
+
+Show date/time in ISO 8601:2004 format
+
+=item --noiso8601
+
+Turn off C<--iso8601>. This is the default.
+
 =item -7 | --ascii
 
 Suppress non-ASCII output. Implies C<--noicons>. If you ask for recursive
@@ -537,7 +639,10 @@ will have no effect:
 
 =item --show_icons
 
-Show the icons for a file
+Show the icons for a file. There will always be at least one icon, and
+sometimes two.
+
+See L</"FILE TYPES"> for more details.
 
 =item --show_name
 
@@ -567,6 +672,58 @@ bytes/KiB/MiB/GiB/TiB.
 =item --show_date
 
 Show the file's last modified date/time.
+
+=back
+
+=head1 FILE TYPES
+
+File types are used to divine what icons to show for a file. The first is determined
+by whether the file is a symlink (and if it is whether it is a link to a file, a directory,
+something else, or is broken), a directory, an executable file, any other kind of file,
+a pipe, a socket, a block device, or a character device:
+
+    link           
+    link (broken)  
+    link (dir)     
+    link (file)    
+    dir            
+    executable     
+    other file     
+    pipe           ﳣ
+    socket         ﳦ
+    blockdev       
+    chardev        
+
+The second is (mostly) determined based on the filename or file extension. There are
+some vaguely sensible defaults built in, but you can control them using the following
+command line arguments.
+
+=over
+
+=item --ext_type EXTENSION TYPE
+
+map files with extension EXTENSION to type TYPE, unless the file's entire name
+matches something specified using C<--name_type>. If this is specified all the
+defaults are turned off unless you explicitly turn them back on.
+
+=item --name_type FILENAME TYPE
+
+map files with name FILENAME to type TYPE. If this is specified all the
+defaults are turned off unless you explicitly turn them back on.
+
+If the FILENAME begins with a C</> then the type will only be applied to directories
+with that name.
+
+If the FILENAME begins with two slashes C<//> then the type will only be applied
+to directories that contain a file with that name.
+
+=item --default_types
+
+Turn on all the defaults.
+
+=item --show_default_types
+
+Spit out all the defaults and immediately exit.
 
 =back
 
