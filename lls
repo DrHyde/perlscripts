@@ -21,7 +21,7 @@ use POSIX qw(strftime);
 # font cheat sheet: https://www.nerdfonts.com/cheat-sheet
 
 my %opt_show = map { $_ => 0 } qw(
-    perms links owner group size date icons filename
+    perms links owner group size date icons name
 );
 foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
     "args",
@@ -33,6 +33,10 @@ foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
         close($default_args_file);
     }
 }
+$SIG{__WARN__} =sub {
+    die(@_, "\nTry -h for help\n") if($_[0] =~ /^Unknown option: /);
+    warn(@_);
+};
 GetOptions(
     'long|l'     => \my $opt_long,
     'all|a'      => \my $opt_all,
@@ -50,15 +54,15 @@ GetOptions(
     'help|h|?'   => \my $help,
     'HELP|H'     => \my $HELP,
     # defaults
-    show_icons    => \$opt_show{icons},
-    show_filename => \$opt_show{filename},
+    show_icons => \$opt_show{icons},
+    show_name  => \$opt_show{name},
     # turned on with -l
-    show_perms    => \$opt_show{perms},
-    show_links    => \$opt_show{links},
-    show_owner    => \$opt_show{owner},
-    show_group    => \$opt_show{group},
-    show_size     => \$opt_show{size},
-    show_date     => \$opt_show{date},
+    show_perms => \$opt_show{perms},
+    show_links => \$opt_show{links},
+    show_owner => \$opt_show{owner},
+    show_group => \$opt_show{group},
+    show_size  => \$opt_show{size},
+    show_date  => \$opt_show{date},
 );
 $opt_ascii   = 0 if($opt_utf8);
 $opt_noicons = 1 if($opt_ascii);
@@ -71,7 +75,7 @@ if(!grep { $_ } values(%opt_show)) {
     if($opt_long) {
         $opt_show{$_}++ foreach (keys(%opt_show));
     } else {
-        @opt_show{qw(icons filename)} = (1, 1);
+        @opt_show{qw(icons name)} = (1, 1);
     }
 }
 $opt_show{git}   = $opt_git;
@@ -94,7 +98,7 @@ work_on(0, @targets);
 
 my @line_max_sizes = ();
 foreach my $line (grep { ref($_) } @output_lines) {
-    foreach my $index (0 .. $#{$line}) {
+    foreach my $index (1, 2, 3) {
         $line_max_sizes[$index] = length($line->[$index]) if(
             !defined($line_max_sizes[$index]) ||
             length($line->[$index]) > $line_max_sizes[$index]
@@ -111,7 +115,7 @@ $format .= $opt_show{date}     ? ' %12s' : '';
 $format .= $opt_show{icons}    ? ' %s'   : '';
 $format .= $opt_show{git}      ? ' %s'   : '';
 $format .= $opt_show{tree}     ? '%s'    : ''; # no space cos tree art always has one
-$format .= $opt_show{filename} ? ' %s'   : '';
+$format .= $opt_show{name}  ? ' %s'   : '';
 $format =~ s/^ //;
 
 foreach my $line (@output_lines) {
@@ -126,7 +130,7 @@ sub work_on ($depth, @targets) {
     my $have_already_rendered;
     my $prev_rendered_was_dir;
     foreach my $target (@targets) {
-        if(-d $target && !$opt_dirs) {
+        if(-d $target && ($opt_recurse || !$opt_dirs)) {
             if($#targets > 0) {
                 push @output_lines, "" if($have_already_rendered);
                 push @output_lines, "$target:";
@@ -141,6 +145,11 @@ sub work_on ($depth, @targets) {
                 $prev_rendered_was_dir = 1;
                 opendir(my $dh, '.') || die("Couldn't read $target: $!\n");
                 my @dirents = grep {
+                    # if --dirs not in effect, return everything
+                    !$opt_dirs ||
+                    # otherwise only return dirs if $opt_recurse in effect
+                    ($opt_recurse && -d $_)
+                } grep {
                     my $candidate = $_;
                     !grep {
                         $candidate eq $_                        ||
@@ -188,7 +197,7 @@ sub build_data ($depth, $dirent) {
         $opt_show{tree}     ? (
             $opt_recurse ? format_tree_art($depth) : ''
         ) : (),
-        $opt_show{filename} ? join(' ',
+        $opt_show{name} ? join(' ',
             $filename, (-l $dirent ? ('->', readlink($dirent)) : ())
         ) : (),
     ];
@@ -435,7 +444,7 @@ everything in the C<FIGNORE> environment variable.
 If a directory name is given on the command line show its metadata, not
 its contents.
 
-FIXME weirdness with -R
+In conjunction with C<-R> recurses into subdirs and only shows directories.
 
 =item -r | --reverse
 
@@ -473,7 +482,7 @@ and:
     $ lls -lR a
     drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44    a
     drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44    └─ b
-    drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44      └─ c
+    drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44       └─ c
     drwxr-xr-x  2  david  staff   68 B 02 Jul 12:44          └─ d
 
 =item -g | --git (not yet implemented)
@@ -518,7 +527,7 @@ will have no effect:
 
 Show the icons for a file
 
-=item --show_filename
+=item --show_name
 
 Show the filename
 
