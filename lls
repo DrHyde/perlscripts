@@ -46,10 +46,11 @@ GetOptions(
     'time|t'     => \my $opt_time,
     'size|S'     => \my $opt_size,
     'recurse|R'  => \my $opt_recurse,
+    'norecurse=s' => \my @opt_no_recurse,
     'git|g'      => \my $opt_git, # FIXME NYI
     'ascii|7'    => \my $opt_ascii,
     'utf8|8'     => \my $opt_utf8,
-    'ignore|I=s' => \my @ignore,
+    'ignore|I=s' => \my @opt_ignore,
     'noicons'    => \my $opt_noicons,
     'help|h|?'   => \my $help,
     'HELP|H'     => \my $HELP,
@@ -82,9 +83,10 @@ $opt_show{git}   = $opt_git;
 $opt_show{tree}  = $opt_recurse;
 $opt_show{icons} = 0 if($opt_noicons);
 
-@ignore = map { s/\/+$//r } map {
+@opt_ignore = map { s/\/+$//; s/\/+/\//rg } map {
     $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : $_
-} @ignore;
+} @opt_ignore;
+@opt_no_recurse = map { s/\/+$//; s/\/+/\//rg } @opt_no_recurse;
 
 my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
@@ -155,7 +157,7 @@ sub work_on ($depth, @targets) {
                         $candidate eq $_                        ||
                         abs_path('.')."/$candidate" eq $_       ||
                         ($_ =~ /^\./ && $candidate =~ /\Q$_\E/)
-                    } @ignore
+                    } @opt_ignore
                 } sortfiles(readdir($dh));
                 while(@dirents) {
                     my $dirent = shift(@dirents);
@@ -165,7 +167,10 @@ sub work_on ($depth, @targets) {
     
                     push @output_lines, build_data($depth, $dirent);
                     work_on($depth + 1, $dirent)
-                        if($opt_recurse && !-l $dirent && -d $dirent && $dirent ne '.git')
+                        if($opt_recurse && !-l $dirent && -d $dirent && !grep {
+                            $dirent eq $_ ||
+                            abs_path('.')."/$dirent" eq $_
+                        } @opt_no_recurse);
                 }
                 closedir($dh);
             };
@@ -484,6 +489,13 @@ and:
     drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44    └─ b
     drwxr-xr-x  3  david  staff  102 B 02 Jul 12:44       └─ c
     drwxr-xr-x  2  david  staff   68 B 02 Jul 12:44          └─ d
+
+=item --norecurse DIR
+
+Takes an argument, the name of a directory to not recurse into even
+when C<-R> is turned on. Like C<--ignore> can be either a name that
+exists in any directory, or a fully-qualified name, and can be supplied
+many times.
 
 =item -g | --git (not yet implemented)
 
