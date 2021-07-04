@@ -94,6 +94,12 @@ GetOptions(
     'name_type=s{2}' => \my @opt_name_types,
     'default_types'  => \my $opt_default_types,
     'show_default_types' => \my $opt_show_default_types,
+    # icon types
+    'icon_type=s{2}' => \my @opt_icon_types,
+    'default_icons'  => \my $opt_default_icons,
+    'show_default_icons' => \my $opt_show_default_icons,
+    # debuggery, undocumented
+    'show_all_args'  => sub { say $_ foreach(@new_argv); exit 1; },
 );
 
 # now post-process args
@@ -102,16 +108,22 @@ GetOptions(
 if($help) { pod2usage(0) }
 if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
 if($opt_show_default_types) {
-    my %defaults = default_opt_types();
-    foreach my $name_part (keys %defaults) {
-        foreach my $type (keys %{$defaults{$name_part}}) {
+    my %defaults = default_file_types();
+    foreach my $name_part (sort keys %defaults) {
+        foreach my $type (sort keys %{$defaults{$name_part}}) {
             foreach my $name (@{$defaults{$name_part}->{$type}}) {
                 say "--${name_part}_type $type $name";
             }
         }
     }
-    exit(0);
 }
+if($opt_show_default_icons) {
+    my %defaults = default_icon_types();
+    foreach my $type (sort keys %defaults) {
+        say "--icon_type $type $defaults{$type}";
+    }
+}
+exit(0) if($opt_show_default_types || $opt_show_default_icons);
 
 # some things imply other things
 $opt_ascii   = 0 if($opt_utf8);
@@ -141,9 +153,9 @@ $opt_show{icons} = 0 if($opt_noicons);
 # useful data structure
 my %opt_type;
 if(!@opt_ext_types && !@opt_name_types) {
-    %opt_type = default_opt_types();
+    %opt_type = default_file_types();
 } else {
-    if($opt_default_types) { %opt_type = default_opt_types(); }
+    if($opt_default_types) { %opt_type = default_file_types(); }
     while(@opt_name_types) {
         my($name, $type) = splice(@opt_name_types, 0, 2);
         $opt_type{name}->{$type} ||= [];
@@ -154,6 +166,16 @@ if(!@opt_ext_types && !@opt_name_types) {
         $opt_type{ext}->{$type} ||= [];
         push @{$opt_type{ext}->{$type}}, $ext;
     }
+}
+# likewise for type/icon pairs
+my %opt_icon;
+if(!@opt_icon_types) {
+    %opt_icon = default_icon_types();
+} else {
+    %opt_icon = (
+        ($opt_default_icons ? default_icon_types(): ()),
+        @opt_icon_types
+    );
 }
 
 # clean up trailing / and multiple // in --ignore and --norecurse,
@@ -424,7 +446,23 @@ sub get_icons ($filename) {
     my $generic  = get_icon_type_generic($filename);
     my $specific = get_icon_type_specific($filename);
 
-    state $map = {
+    return join(' ', ($opt_icon{$generic} || ' '), ($opt_icon{$specific} || ' '));
+}
+
+sub default_icon_types {
+    (
+        link       => '',
+        linkbroken => '',
+        linkfile   => '',
+        linkdir    => '',
+        dir        => '',
+        exec       => '',
+        file       => '',
+        pipe       => 'ﳣ',
+        socket     => 'ﳦ',
+        blockdev   => '',
+        chardev    => '',
+
         test       => '',
         text       => '',
         list       => '',
@@ -438,24 +476,10 @@ sub get_icons ($filename) {
         git        => '',
         ci         => '',
         apple      => '',
-
-        dir        => '',
-        link       => '',
-        linkbroken => '',
-        linkfile   => '',
-        linkdir    => '',
-        exec       => '',
-        file       => '',
-        pipe       => 'ﳣ',
-        socket     => 'ﳦ',
-        blockdev   => '',
-        chardev    => '',
-        ''         => ' ',
-    };
-    return join(' ', $map->{$generic}, $map->{$specific});
+    )
 }
 
-sub default_opt_types {
+sub default_file_types {
     ( 
         ext  => {
             c     => [qw(c h)],
@@ -723,7 +747,8 @@ to directories that contain a file with that name.
 
 =item --default_types
 
-Turn on all the defaults.
+Turn on all the defaults. If you are inclined to provide your own C<--name_type>s
+or C<--ext_type>s then I suggest that you put this in your config file.
 
 =item --show_default_types
 
@@ -731,7 +756,7 @@ Spit out all the defaults and immediately exit.
 
 =back
 
-You can control which icons are associated with each type thus (not yet implemented):
+You can control which icons are associated with each type thus:
 
 =over
 
@@ -744,7 +769,8 @@ a single width character. However, no checks are made in this regard.
 
 =item --default_icons
 
-Turn on all the defaults
+Turn on all the defaults. If you are inclined to provide your own C<--icon_type>s
+then I suggest that you put this in your config file.
 
 =item --show_default_icons
 
