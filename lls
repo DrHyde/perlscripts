@@ -20,6 +20,7 @@ use File::Basename;
 use File::cd;
 use File::Slurper qw(read_text);
 use POSIX qw(strftime);
+use Term::ANSIColor;
 
 # read defaults from ~/.config/lls/*
 foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
@@ -281,7 +282,6 @@ sub work_on ($depth, @targets) {
 
 sub build_data ($depth, $dirent) {
     my $icons    = get_icons($dirent =~ /^\// ? $dirent : abs_path('.')."/$dirent");
-    my $filename = get_colourized_filename($dirent);
 
     return [
         $opt_show{perms}    ? format_mode(cached_stat($dirent)->[2]) : (),
@@ -298,13 +298,26 @@ sub build_data ($depth, $dirent) {
         ) : (),
         $opt_show{icons}    ? $icons : (),
         $opt_show{git}      ? format_git($dirent) : (),
-        $opt_show{tree}     ? (
-            $opt_recurse ? format_tree_art($depth) : ''
-        ) : (),
-        $opt_show{name} ? join(' ',
-            $filename, (-l $dirent ? ('->', readlink($dirent)) : ())
-        ) : (),
+        $opt_show{tree}     ? ( $opt_recurse ? format_tree_art($depth) : '') : (),
+        $opt_show{name}     ? colourize($dirent, -l $dirent ? join(' ', $dirent, '->', readlink($dirent)) : $dirent) : (),
     ];
+}
+
+sub colourize ($filename, $text) {
+    state %defaults = default_colour_types();
+    state %split_colour_types = map { $_ => [split('_ON_', uc($defaults{$_}))] } keys %defaults;
+    my $rendered_text = -t STDOUT 
+        ? join('', do { 
+              my @colours = @{
+                  $split_colour_types{get_icon_type_specific($filename)} ||
+                  $split_colour_types{get_icon_type_generic($filename)}  || []
+              };
+              if(exists($colours[1])) { $colours[1] = "ON_$colours[1]" }
+              color(@colours) || '';
+          }, $text, color('RESET'))
+        : $text;
+    # chomp($rendered_filename);
+    return $rendered_text;
 }
 
 my %git_cache;
@@ -412,18 +425,6 @@ sub cached_stat ($filename) {
 
     return $stat_cache{$filename} if(exists($stat_cache{$filename}));
     return $stat_cache{$filename} = [lstat($filename)];
-}
-
-sub get_colourized_filename ($filename) {
-    state $ls_command = `ls --version 2>/dev/null` ? 'ls -d --color=always' :
-                        `uname` =~ /Darwin/        ? 'CLICOLOR_FORCE=1 ls -dG' :
-                                                     'ls -d';
-
-    my $rendered_filename = -t STDOUT 
-        ? `$ls_command "$filename"`
-        : $filename;
-    chomp($rendered_filename);
-    return $rendered_filename;
 }
 
 sub get_icon_type_specific {
@@ -554,6 +555,23 @@ sub default_file_types {
             test   => [qw(/t)],
             tree   => [qw(cpanfile Makefile Makefile.PL)],
         }
+    )
+}
+
+sub default_colour_types {
+    (
+        linkbroken => 'black_on_red',
+        linkdir    => 'cyan',
+        linkfile   => 'italic',
+        link       => 'dark',
+        file       => 'white',
+        dir        => 'bright_cyan',
+        exec       => 'red',
+        git        => 'blue',
+        test       => 'bright_green',
+        c          => 'yellow',
+        perl       => 'yellow',
+        object     => 'blue',
     )
 }
 
