@@ -251,7 +251,8 @@ sub work_on ($depth, @targets) {
                     !grep {
                         $candidate eq $_                        ||
                         abs_path('.')."/$candidate" eq $_       ||
-                        ($_ =~ /^\./ && $candidate =~ /\Q$_\E/)
+                        ($_ =~ /^\./ && $candidate =~ /\Q$_\E/) ||
+                        ($_ =~ /^\Q$candidate\E\// && -e $_)
                     } @opt_ignore
                 } sortfiles(readdir($dh));
                 while(@dirents) {
@@ -605,6 +606,9 @@ listed, including if a file with that name exists in a subdir and C<-R>
 is in effect. To only ignore a specific file and not any other files with
 the same name provide its fully qualified absolute path. If FILE begins with
 a dot then any file with that extension will be ignored.
+
+If FILE is of the form DIR/CONTENTS then directories called DIR that contain
+CONTENTS will be ignored.
 
 This option can be supplied many times.
 
