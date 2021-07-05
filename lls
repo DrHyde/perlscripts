@@ -71,7 +71,7 @@ GetOptions(
     'size|S'     => \my $opt_size,
     'recurse|R'  => \my $opt_recurse,
     'norecurse=s' => \my @opt_no_recurse,
-    'git|g'      => \my $opt_git, # FIXME NYI
+    'git|g'      => \my $opt_git,
     'ascii|7'    => \my $opt_ascii,
     'utf8|8'     => \my $opt_utf8,
     'ignore|I=s' => \my @opt_ignore,
@@ -308,43 +308,27 @@ sub build_data ($depth, $dirent) {
 
 my %git_cache;
 sub format_git ($dirent) {
+    return '  ' if($dirent eq '.git');
     my $what_to_check = $dirent =~ /^\// ? $dirent : abs_path('.');
-    $git_cache{$what_to_check} ||= `git status -s --ignored=matching 2>/dev/null`;
+    $git_cache{$what_to_check} ||= `git status -s --ignored=matching $what_to_check 2>/dev/null`;
     return '  ' if(!$git_cache{$what_to_check});
 
-    # The runes mean:
-    #   X          Y     Meaning
-    #   -------------------------------------------------
-    #            [AMD]   not updated
-    #   M        [ MD]   updated in index
-    #   A        [ MD]   added to index
-    #   D                deleted from index
-    #   R        [ MD]   renamed in index
-    #   C        [ MD]   copied in index
-    #   [MARC]           index and work tree matches
-    #   [ MARC]     M    work tree changed since index
-    #   [ MARC]     D    deleted in work tree
-    #   [ D]        R    renamed in work tree
-    #   [ D]        C    copied in work tree
-    #   -------------------------------------------------
-    #   D           D    unmerged, both deleted
-    #   A           U    unmerged, added by us
-    #   U           D    unmerged, deleted by them
-    #   U           A    unmerged, added by them
-    #   D           U    unmerged, deleted by us
-    #   A           A    unmerged, both added
-    #   U           U    unmerged, both modified
-    #   -------------------------------------------------
-    #   ?           ?    untracked
-    #   !           !    ignored
-
+    # See https://mirrors.edge.kernel.org/pub/software/scm/git/docs/git-status.html for
+    # what [AMRUD] and friends mean
     my %git_info = map {
-        substr($_, 3) => substr($_, 0, 1) . substr($_, 1, 1)
+        substr($_, 3) => substr($_, 0, 2)
+                         =~ tr/AMRUD/+±?-/r
+                         =~ s/(!!|\?\?)/$1 eq '!!' ? 'Ig' : 'Un'/er
     } split(/\n/, $git_cache{$what_to_check});
     return $git_info{$dirent} if(exists($git_info{$dirent}));
 
-    # FIXME make this examine child nodes
-    if(-d $dirent) { return 'XX' }
+    if(-d $dirent) {
+        my @candidates = grep { /^\Q$dirent\E\// } keys %git_info;
+        my %statuses = map { $_ => 1 } @git_info{@candidates};
+        if((keys %statuses) == 1) { return keys %statuses } # all changes in children are the same
+        elsif((keys %statuses) == 0) { return '  ' }        # no changes in children
+         else { return '..' }                               # mixture
+    }
 
     return '  ';
 }
@@ -681,7 +665,7 @@ when C<-R> is turned on. Like C<--ignore> can be either a name that
 exists in any directory, or a fully-qualified name, and can be supplied
 many times.
 
-=item -g | --git (not yet implemented)
+=item -g | --git
 
 Include information on files' git status.
 
