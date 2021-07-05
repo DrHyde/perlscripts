@@ -324,7 +324,7 @@ sub format_git ($dirent) {
 
     if(-d $dirent) {
         my @candidates = grep { /^\Q$dirent\E\// } keys %git_info;
-        my %statuses = map { $_ => 1 } @git_info{@candidates};
+        my %statuses = map { $_ => 1 } grep { $_ ne 'Ig' && $_ ne 'Un' } @git_info{@candidates};
         if((keys %statuses) == 1) { return keys %statuses } # all changes in children are the same
         elsif((keys %statuses) == 0) { return '  ' }        # no changes in children
          else { return '..' }                               # mixture
