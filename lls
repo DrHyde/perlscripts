@@ -28,7 +28,7 @@ foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
     "${^O}_args"
 ) {
     if(open(my $default_args_file, '<', $args_file)) {
-        (my $opts = join(' ', <$default_args_file>)) =~ s/^\s+|\s+$//g;
+        (my $opts = join(' ', grep { $_ !~ /^#/ } <$default_args_file>)) =~ s/^\s+|\s+$//g;
         unshift(@ARGV, split(/\s+/, $opts));
         close($default_args_file);
     }
@@ -857,3 +857,5 @@ Spit out all the defaults and immediately exit.
 Default arguments will be read from C<~/.config/lls/args> if it exists.
 Platform-specific arguments will be read from C<~/.config/lls/${platform}_args>
 if it exists.
+
+Any line in those files beginning with a C<#> will be ignored.
