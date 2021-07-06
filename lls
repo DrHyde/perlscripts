@@ -312,10 +312,14 @@ sub work_on ($depth, @targets) {
                 } grep {
                     my $candidate = $_;
                     !grep {
-                        $candidate eq $_                        ||
-                        abs_path('.')."/$candidate" eq $_       ||
-                        ($_ =~ /^\./ && $candidate =~ /\Q$_\E/) ||
-                        ($_ =~ /^\Q$candidate\E\// && -e $_)
+                        $candidate eq $_                        || # simple match
+                        abs_path('.')."/$candidate" eq $_       || # /full/path
+                        ($_ =~ /^\./ && $candidate =~ /\Q$_\E/) || # .extension
+                        ($_ =~ /^\Q$candidate\E\// && -e $_)    || # dir/contains
+                        (
+                            $_ =~ /^\Q$candidate\E\[(.*)\]/ &&     # file[within]
+                            basename(abs_path('.')) eq $1
+                        )
                     } @opt_ignore
                 } sortfiles(readdir($dh));
                 while(@dirents) {
@@ -506,12 +510,16 @@ sub get_icon_type_specific {
         ( grep {
             my $type = $_;
             grep {
-                $_ eq $filename ||
-                ( -d $filename && $_ eq "/$filename") ||
+                $_ eq $filename                       ||  # simple match
+                ( -d $filename && $_ eq "/$filename") ||  # directory, simple match
                 (
-                    -d $original_filename &&
+                    -d $original_filename &&              # //dir-contains-this
                     /^\/\// &&
                     -e "$original_filename/".(s/^\/\///r)
+                ) ||
+                (
+                    $_ =~ /^\Q$filename\E\[(.*)\]/ &&     # file[within]
+                    basename(abs_path('.')) eq $1
                 )
             } @{$opt_type{name}->{$type}};
         } keys %{$opt_type{name}} ),
@@ -624,7 +632,7 @@ sub default_file_types {
         },
         name => {
             apple  => [qw(.AppleDB .AppleDouble .DS_Store)],
-            ci     => [qw(.appveyor.yml .cirrus.yml)],
+            ci     => [qw(.appveyor.yml .cirrus.yml .travis.yml workflows[.github])],
             exec   => [qw(/bin)],
             git    => [qw(.github .gitignore .git //.git)],
             list   => [qw(CHANGES CHANGELOG Changes Changelog)],
@@ -700,6 +708,9 @@ a dot then any file with that extension will be ignored.
 
 If FILE is of the form DIR/CONTENTS then directories called DIR that contain
 CONTENTS will be ignored.
+
+If FILE is of the form FILE[DIR] then anything called FILE whose parent
+directory is called DIR will be ignored.
 
 This option can be supplied many times.
 
@@ -892,6 +903,9 @@ with that name.
 
 If the FILENAME begins with two slashes C<//> then the type will only be applied
 to directories that contain a file with that name.
+
+If FILENAME is of the form FILENAME[DIR] then anything called FILENAME whose parent
+directory is called DIR will match.
 
 =item --default_types
 
