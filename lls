@@ -134,6 +134,8 @@ GetOptions(
     'colour_type=s{2}' => \my @opt_colour_types,
     'default_colours'  => \my $opt_default_colours,
     'show_default_colours' => \my $opt_show_default_colours,
+    'nocolour'             => \my $opt_nocolour,
+    'force_colour'          => \my $opt_force_colour,
     'colour_depth=i' => sub ($meh, $input) {
         no warnings 'redefine';
         (*rgb_to_bg, *rgb_to_fg) = (
@@ -371,7 +373,7 @@ sub build_data ($depth, $dirent) {
 
 sub colourize ($filename, $text) {
     state %split_colour_types = map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour;
-    my $rendered_text = -t STDOUT 
+    my $rendered_text = ($opt_force_colour || (-t STDOUT && !$opt_nocolour))
         ? join('', do { 
               my $type = get_icon_type_specific($filename) ||
                          get_icon_type_generic($filename)  || '';
@@ -687,7 +689,7 @@ If you are not using iTerm on a Mac then you are computering wrong.
 Turns on all the available columns. Without any other options this will be the
 same as C<ls -l> but with an extra column of icons before the filenames.
 
-See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES AND ICONS">.
+See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES, ICONS, AND COLOURS">.
 
 =item -a | --all
 
@@ -779,6 +781,16 @@ Include information on files' git status.
 
 Suppress icons output. Incompatible with C<--show_icons>.
 
+=item --nocolour
+
+Suppress colour output. Colour is also suppressed by default when output
+is not to a terminal.
+
+=item --force_colour
+
+Turn colour output on even if output is not to a terminal. Use with
+caution!
+
 =item --iso8601
 
 Show date/time in ISO 8601:2004 format
@@ -822,7 +834,7 @@ will have no effect:
 Show the icons for a file. There will always be at least one icon, and
 sometimes two.
 
-See L</"FILE TYPES AND ICONS"> for more details.
+See L</"FILE TYPES, ICONS, AND COLOURS"> for more details.
 
 =item --show_name
 
@@ -855,7 +867,7 @@ Show the file's last modified date/time.
 
 =back
 
-=head1 FILE TYPES AND ICONS
+=head1 FILE TYPES, ICONS, AND COLOURS
 
 File types and icon type maps are used to divine what icons to show for a file.
 
