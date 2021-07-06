@@ -3,7 +3,7 @@
 # this requires nerd-fonts, and proper terminal configuation
 # font cheat sheet: https://www.nerdfonts.com/cheat-sheet
 
-use 5.012;
+use 5.020; # sub sigs, s///r
 use strict;
 use warnings;
 use utf8;
@@ -20,7 +20,11 @@ use File::Basename;
 use File::cd;
 use File::Slurper qw(read_text);
 use POSIX qw(strftime);
-use Term::ANSIColor;
+
+use Color::ANSI::Util ();
+use Term::ANSIColor qw(FAINT ITALIC BOLD UNDERLINE RESET);
+use Graphics::ColorNames;
+my $pal = Graphics::ColorNames->new();
 
 # read defaults from ~/.config/lls/*
 foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
@@ -28,8 +32,30 @@ foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
     "${^O}_args"
 ) {
     if(open(my $default_args_file, '<', $args_file)) {
-        (my $opts = join(' ', grep { $_ !~ /^#/ } <$default_args_file>)) =~ s/^\s+|\s+$//g;
-        unshift(@ARGV, split(/\s+/, $opts));
+        my @opts = map {
+            my $line = $_ =~ s/^\s+|\s+$//gr;
+            my @words;
+            my $this_word = '';
+            my $in_quotes = '';
+            while(length($line)) {
+                my $this_char = substr($line, 0, 1, '');
+                if($this_char =~ /['"]/ && !$in_quotes) {
+                    $in_quotes = $this_char;
+                } elsif($this_char eq $in_quotes) {
+                    push @words, $this_word;
+                    $this_word = $in_quotes = '';
+                } elsif($in_quotes) {
+                    $this_word .= $this_char;
+                } elsif($this_char =~ /\s/) {
+                    push @words, $this_word;
+                    $this_word = '';
+                } else {
+                    $this_word .= $this_char;
+                }
+            }
+            grep { length } (@words, $this_word);
+        } grep { $_ !~ /^#/ } <$default_args_file>;
+        unshift(@ARGV, @opts);
         close($default_args_file);
     }
 }
@@ -54,13 +80,17 @@ while(@ARGV) {
 
 # finally after all that throat-clearing we can parse the command line.
 # first, die on errors
-$SIG{__WARN__} =sub {
-    die(@_, "\nTry -h for help\n") if($_[0] =~ /^Unknown option: /);
+$SIG{__WARN__} = sub {
+    die(@_, "\nTry -h for help\n") if($_[0] =~ /^Value .* invalid|(Incorrect|Unknown) option: /);
     warn(@_);
 };
 # make sure these exist so we can reference them
 my %opt_show = map { $_ => 0 } qw(
     perms links owner group size date icons name
+);
+(*rgb_to_bg, *rgb_to_fg) = (
+    \&Color::ANSI::Util::rgb_to_ansi24b_bg_code,
+    \&Color::ANSI::Util::rgb_to_ansi24b_fg_code
 );
 GetOptions(
     'long|l'     => \my $opt_long,
@@ -100,6 +130,22 @@ GetOptions(
     'icon_type=s{2}' => \my @opt_icon_types,
     'default_icons'  => \my $opt_default_icons,
     'show_default_icons' => \my $opt_show_default_icons,
+    # colours
+    'colour_type=s{2}' => \my @opt_colour_types,
+    'default_colours'  => \my $opt_default_colours,
+    'show_default_colours' => \my $opt_show_default_colours,
+    'colour_depth=i' => sub ($meh, $input) {
+        no warnings 'redefine';
+        (*rgb_to_bg, *rgb_to_fg) = (
+            $input == 4  ? ( \&Color::ANSI::Util::rgb_to_ansi16_bg_code,
+                             \&Color::ANSI::Util::rgb_to_ansi16_fg_code ) :
+            $input == 8  ? ( \&Color::ANSI::Util::rgb_to_ansi256_bg_code,
+                             \&Color::ANSI::Util::rgb_to_ansi256_fg_code ) :
+            $input == 24 ? ( \&Color::ANSI::Util::rgb_to_ansi24b_bg_code,
+                             \&Color::ANSI::Util::rgb_to_ansi24b_fg_code ) :
+                           die("Incorrect option: --colour_depth $input, should be 4, 8, or 24\n")
+        );
+    },
     # debuggery, undocumented
     'show_all_args'  => sub { say $_ foreach(@new_argv); exit 1; },
 );
@@ -125,7 +171,13 @@ if($opt_show_default_icons) {
         say "--icon_type $type $defaults{$type}";
     }
 }
-exit(0) if($opt_show_default_types || $opt_show_default_icons);
+if($opt_show_default_colours) {
+    my %defaults = default_colour_types();
+    foreach my $type (sort keys %defaults) {
+        say "--colour_type $type '$defaults{$type}'";
+    }
+}
+exit(0) if($opt_show_default_types || $opt_show_default_icons || $opt_show_default_colours);
 
 # some things imply other things
 $opt_ascii   = 0 if($opt_utf8);
@@ -175,8 +227,18 @@ if(!@opt_icon_types) {
     %opt_icon = default_icon_types();
 } else {
     %opt_icon = (
-        ($opt_default_icons ? default_icon_types(): ()),
+        ($opt_default_icons ? default_icon_types() : ()),
         @opt_icon_types
+    );
+}
+# and for type/colour pairs
+my %opt_colour;
+if(!@opt_colour_types) {
+    %opt_colour = default_colour_types();
+} else {
+    %opt_colour = (
+        ($opt_default_colours ? default_colour_types() : ()),
+        @opt_colour_types
     );
 }
 
@@ -188,7 +250,7 @@ if(!@opt_icon_types) {
 @opt_no_recurse = map { s/\/+$//; s/\/+/\//rg } @opt_no_recurse;
 
 # finally, we're ready to go
-my @targets = map { s{/+$}{}r } sortfiles(@ARGV);
+my @targets = map { s{/+$}{}r } @ARGV; # sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
 my @output_lines;
 my @last;
@@ -304,17 +366,25 @@ sub build_data ($depth, $dirent) {
 }
 
 sub colourize ($filename, $text) {
-    state %defaults = default_colour_types();
-    state %split_colour_types = map { $_ => [split('_ON_', uc($defaults{$_}))] } keys %defaults;
+    state %split_colour_types = map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour;
     my $rendered_text = -t STDOUT 
         ? join('', do { 
-              my @colours = @{
-                  $split_colour_types{get_icon_type_specific($filename)} ||
-                  $split_colour_types{get_icon_type_generic($filename)}  || []
-              };
-              if(exists($colours[1])) { $colours[1] = "ON_$colours[1]" }
-              color(@colours) || '';
-          }, $text, color('RESET'))
+              my $type = get_icon_type_specific($filename) ||
+                         get_icon_type_generic($filename)  || '';
+              my ($fg, $bg) = @{$split_colour_types{$type} || ['']};
+              (
+                  (
+                      map {
+                          $_ eq 'faint'         ? FAINT     :
+                          $_ eq 'italic'        ? ITALIC    :
+                          $_ eq 'bold'          ? BOLD      :
+                          $_ =~ /^underlined?$/ ? UNDERLINE :
+                                                  rgb_to_fg($pal->hex($_))
+                      } split(/\s+/, $fg)
+                  ),
+                  $bg ? rgb_to_bg($pal->hex($bg)) : ()
+              )
+          }, $text, RESET)
         : $text;
     # chomp($rendered_filename);
     return $rendered_text;
@@ -458,10 +528,11 @@ sub get_icon_type_generic ($filename) {
         -l $filename ? ( do {
             my $target = readlink($filename);
             my $target_type = get_icon_type_generic($target);
-            !-e $target                     ? 'linkbroken' :
-            $target_type eq 'dir'           ? 'linkdir'  :
-            $target_type =~ /^(file|exec)$/ ? 'linkfile' :
-                                              'link'
+            !-e $target            ? 'linkbroken' :
+            $target_type eq 'dir'  ? 'linkdir'  :
+            $target_type =~ 'file' ? 'linkfile' :
+            $target_type =~ 'exec' ? 'linkexec' :
+                                     'link'
         } ) :
         -d $filename ? 'dir'      :
         -x $filename ? 'exec'     :
@@ -486,6 +557,7 @@ sub default_icon_types {
         link       => '',
         linkbroken => '',
         linkfile   => '',
+        linkexec   => '',
         linkdir    => '',
         dir        => '',
         exec       => '',
@@ -525,24 +597,29 @@ sub default_icon_types {
 sub default_file_types {
     ( 
         ext  => {
+            # generic files
+            data       => [qw(yml json)],
+            lock       => ['lock'],
+            text       => [qw(md txt)],
+
+            # programming
             'c++'      => ['cpp'],
             c          => [qw(c h)],
-            data       => [qw(yml json)],
             golang     => [qw(go)],
             haskell    => [qw(hs)],
             html       => [qw(htm html)], 
             java       => [qw(java)],
             javascript => [qw(js)],
             lisp       => [qw(lsp lisp el elc)],
-            lock       => ['lock'],
-            object     => [qw(bs o)],
             perl       => [qw(pl pm PL xs)],
             php        => [qw(php)],
             python     => [qw(py pyc pyo)],
             ruby       => [qw(rb)],
             rust       => [qw(rs rlib)],
             test       => ['t'],
-            text       => [qw(md txt)],
+            # build artifacts
+            object     => [qw(o)],
+            # editor droppings
             vim        => ['swp'],
         },
         name => {
@@ -550,28 +627,24 @@ sub default_file_types {
             ci     => [qw(.appveyor.yml .cirrus.yml)],
             exec   => [qw(/bin)],
             git    => [qw(.github .gitignore .git //.git)],
-            list   => [qw(MANIFEST MANIFEST.SKIP CHANGES CHANGELOG Changes Changelog)],
-            object => [qw(/blib)],
+            list   => [qw(CHANGES CHANGELOG Changes Changelog)],
             test   => [qw(/t)],
-            tree   => [qw(cpanfile Makefile Makefile.PL)],
+            text   => [qw(README)],
+            tree   => [qw(Makefile)],
         }
     )
 }
 
 sub default_colour_types {
     (
-        linkbroken => 'black_on_red',
-        linkdir    => 'cyan',
+        linkbroken => 'black on red',
         linkfile   => 'italic',
-        link       => 'dark',
-        file       => 'white',
-        dir        => 'bright_cyan',
-        exec       => 'red',
+        linkdir    => 'faint cyan',
+        linkexec   => 'bold red',
+        link       => 'faint',
+        dir        => 'cyan',
+        exec       => 'bold red',
         git        => 'blue',
-        test       => 'bright_green',
-        c          => 'yellow',
-        perl       => 'yellow',
-        object     => 'blue',
     )
 }
 
@@ -785,6 +858,7 @@ are shown below:
     linkbroken   
     linkdir      
     linkfile     
+    linkexec     
     dir          
     executable   
     file         
@@ -836,7 +910,7 @@ You can control which icons are associated with each type thus:
 
 =item --icon_type TYPE ICON
 
-map any file with type TYPE to icon ICON. If this is specified all the defaults
+Map any file with type TYPE to icon ICON. If this is specified all the defaults
 are turned off unless you explicitly turn them back on. Can be used multiple times.
 ICON should be a single character, and the display will go all wibbly if it isn't
 a single width character. However, no checks are made in this regard.
@@ -849,6 +923,45 @@ then I suggest that you put this in your config file.
 =item --show_default_icons
 
 Spit out all the defaults and immediately exit.
+
+=back
+
+And you can control which colours file names are displayed thus:
+
+=over
+
+=item --colour_type TYPE COLOUR
+
+Show files of type TYPE in COLOUR. If this is specified all the defaults
+are turned off unless you explicitly turn them back on. Can be used multiple times.
+
+COLOUR is a string of words separated by spaces, of the form C<FOREGROUND [on BACKGROUND]>.
+
+BACKGROUND should be one of the colour names I<without spaces in> from X11's C<rgb.txt>, a copy of which can be found at L<https://cgit.freedesktop.org/xorg/app/rgb/plain/rgb.txt>.
+
+FOREGROUND may contain a colour, but may also contain the formatting
+instructions C<faint>, C<italic>, C<bold> and C<underline>.
+
+If you don't value your eyes then you might like to try
+C<underlined italic magenta on green>. That and some other exotic combinations
+may require a modern terminal.
+
+=item --colour_depth 4|8|24
+
+How many bits to use for colourizing output. If not specified we assume 24 bit,
+because this is the 21st century.
+
+Unfortunately it is not possible to reliably detect colour depth.
+
+=item --default_colours
+
+Turn on all the defaults. If you are inclined to provide your own C<--colour_type>s
+then I suggest that you put this in your config file.
+
+=item --show_default_colours
+
+Spit out all the defaults and immediately exit. The defaults assume your terminal
+has a black background. If this is not the case then you are computering wrong.
 
 =back
 
