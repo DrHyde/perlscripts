@@ -124,6 +124,7 @@ GetOptions(
     # type maps
     'ext_type=s{2}'  => \my @opt_ext_types,
     'name_type=s{2}' => \my @opt_name_types,
+    'shebang_type=s{2}' => \my @opt_shebang_types,
     'default_types'  => \my $opt_default_types,
     'show_default_types' => \my $opt_show_default_types,
     # icon types
@@ -221,6 +222,11 @@ if(!@opt_ext_types && !@opt_name_types) {
         my($ext, $type) = splice(@opt_ext_types, 0, 2);
         $opt_type{ext}->{$type} ||= [];
         push @{$opt_type{ext}->{$type}}, $ext;
+    }
+    while(@opt_shebang_types) {
+        my($shebang, $type) = splice(@opt_shebang_types, 0, 2);
+        $opt_type{shebang}->{$type} ||= [];
+        push @{$opt_type{shebang}->{$type}}, $shebang;
     }
 }
 # likewise for type/icon pairs
@@ -367,7 +373,14 @@ sub build_data ($depth, $dirent) {
         $opt_show{icons}    ? $icons : (),
         $opt_show{git}      ? format_git($dirent) : (),
         $opt_show{tree}     ? ( $opt_recurse ? format_tree_art($depth) : '') : (),
-        $opt_show{name}     ? colourize($dirent, -l $dirent ? join(' ', $dirent, '->', readlink($dirent)) : $dirent) : (),
+        $opt_show{name}     ? colourize(
+            $dirent,
+            -l $dirent                    ?
+                join(' ', $dirent, '->', readlink($dirent)) :
+            $opt_git && -d "$dirent/.git" ? # $dirent eq '.git' ?
+                "$dirent   (on ".(`git -C "$dirent" rev-parse --abbrev-ref HEAD` =~ s/\s+//r).")" :
+                $dirent
+        ) : (),
     ];
 }
 
@@ -375,8 +388,13 @@ sub colourize ($filename, $text) {
     state %split_colour_types = map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour;
     my $rendered_text = ($opt_force_colour || (-t STDOUT && !$opt_nocolour))
         ? join('', do { 
-              my $type = get_icon_type_specific($filename) ||
-                         get_icon_type_generic($filename)  || '';
+              # link/exec are special, we don't want to over-ride them with
+              # something more specialized
+              my $generic = get_icon_type_generic($filename);
+              my $type = $generic =~ /^(link|exec)/
+                             ? $generic
+                             : get_icon_type_specific($filename) ||
+                               $generic  || '';
               my ($fg, $bg) = @{$split_colour_types{$type} || ['']};
               (
                   (
@@ -406,6 +424,8 @@ sub format_git ($dirent) {
     # See https://mirrors.edge.kernel.org/pub/software/scm/git/docs/git-status.html for
     # what [AMRUD] and friends mean
     my %git_info = map {
+        $opt_ascii ? tr/±/CR/r : $_
+    } map {
         substr($_, 3) => substr($_, 0, 2)
                          =~ tr/AMRUD/+±?-/r
                          =~ s/(!!|\?\?)/$1 eq '!!' ? 'Ig' : 'Un'/er
@@ -508,7 +528,8 @@ sub get_icon_type_specific {
     my $filename = basename($original_filename);
     (my $ext = $filename) =~ s/^.*\.//;
     $ext = '' if($ext eq $filename);
-    return (
+    
+    my $type = 
         ( grep {
             my $type = $_;
             grep {
@@ -524,13 +545,34 @@ sub get_icon_type_specific {
                     basename(abs_path('.')) eq $1
                 )
             } @{$opt_type{name}->{$type}};
-        } keys %{$opt_type{name}} ),
+        } keys %{$opt_type{name}} )[0];
+    $type ||=
         ( grep {
             my $type = $_;
             grep { $_ eq $ext } @{$opt_type{ext}->{$type}};
-        } keys %{$opt_type{ext}} ),
-        ''
-    )[0];
+        } keys %{$opt_type{ext}} )[0];
+    $type ||=
+        ( grep {
+            my $type = $_;
+            if(-f $filename && open(my $shebang_fh, '<', $filename)) { 
+                binmode($shebang_fh); # binaries are not gonna be valid UTF-8!
+                my $shebang_line = <$shebang_fh>;
+                grep {
+                    $shebang_line &&
+                    $shebang_line =~ m{
+                        ^\#!
+                        (
+                            /([^/]+/)* |
+                            /usr/bin/env\s+
+                        )
+                        $_
+                        (\s|$)
+                    }x
+                } @{$opt_type{shebang}->{$type}}
+            }  else { () }
+        } keys %{$opt_type{shebang}} )[0]
+        if(exists($opt_type{shebang}));
+    $type || '';
 }
 
 sub get_icon_type_generic ($filename) {
@@ -650,7 +692,7 @@ sub default_colour_types {
         linkbroken => 'black on red',
         linkfile   => 'italic',
         linkdir    => 'faint cyan',
-        linkexec   => 'bold red',
+        linkexec   => 'italic bold darkred',
         link       => 'faint',
         dir        => 'cyan',
         exec       => 'bold red',
@@ -890,23 +932,18 @@ are shown below:
     blockdev     
     chardev      
 
-The second icon is determined based on the filename, file extension, or whether
-a directory contains a particular filename. There are some vaguely sensible
-defaults built in, but you can control them using the following command line
-arguments.
+The second icon is determined based on the filename (in the various
+permutations specified for C<--name_type>), or if that doesn't match based on
+file extension, or if that doesn't match by looking for a shebang line at the
+start of a file. There are some vaguely sensible defaults built in, but you can
+control them using the following command line arguments.
 
 =over
 
-=item --ext_type EXTENSION TYPE
-
-map files with extension EXTENSION to type TYPE, unless the file's entire name
-matches something specified using C<--name_type>. If this is specified all the
-defaults are turned off unless you explicitly turn them back on. Can be used
-multiple times.
-
 =item --name_type FILENAME TYPE
 
-map files with name FILENAME to type TYPE. If this is specified all the
+Map files with name FILENAME to type TYPE. If this is specified all the
+type map 
 defaults are turned off unless you explicitly turn them back on. Can be used
 multiple times.
 
@@ -918,6 +955,24 @@ to directories that contain a file with that name.
 
 If FILENAME is of the form FILENAME[DIR] then anything called FILENAME whose parent
 directory is called DIR will match.
+
+=item --ext_type EXTENSION TYPE
+
+Map files with extension EXTENSION to type TYPE, unless the file's entire name
+matches something specified using C<--name_type>. If this is specified all the
+type map
+defaults are turned off unless you explicitly turn them back on. Can be used
+multiple times.
+
+=item --shebang_type EXECUTABLE TYPE
+
+This is very much a last resort as it involves opening and reading files, which
+is slow. We will look for a shebang line at the start of the file which
+contains EXECUTABLE. It will match both C<#!/path/to/$executable> and
+C<#!/usr/bin/env $executable>.
+
+There are no defaults for this, and its presence will I<not> turn off the
+default filename/extension type mapping.
 
 =item --default_types
 
