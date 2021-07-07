@@ -426,9 +426,12 @@ sub format_git ($dirent) {
     my %git_info = map {
         $opt_ascii ? tr/±/CR/r : $_
     } map {
-        substr($_, 3) => substr($_, 0, 2)
-                         =~ tr/AMRUD/+±?-/r
-                         =~ s/(!!|\?\?)/$1 eq '!!' ? 'Ig' : 'Un'/er
+        my $filename_in_git = substr($_, 3)
+                                 =~ s/^.* -> //r; # the new name after a git mv
+        my $status          = substr($_, 0, 2)
+                                 =~ tr/?AMRUD/X+±?-/r
+                                 =~ s/(!!|XX)/$1 eq '!!' ? 'Ig' : 'Un'/er;
+        $filename_in_git => $status;
     } split(/\n/, $git_cache{$what_to_check});
     return $git_info{$dirent} if(exists($git_info{$dirent}));
 
@@ -1018,7 +1021,8 @@ are turned off unless you explicitly turn them back on. Can be used multiple tim
 
 COLOUR is a string of words separated by spaces, of the form C<FOREGROUND [on BACKGROUND]>.
 
-BACKGROUND should be one of the colour names I<without spaces in> from X11's C<rgb.txt>, a copy of which can be found at L<https://cgit.freedesktop.org/xorg/app/rgb/plain/rgb.txt>.
+BACKGROUND should be one of the colour names I<without spaces in> from X11's C<rgb.txt>,
+a copy of which can be found at L<https://cgit.freedesktop.org/xorg/app/rgb/plain/rgb.txt>.
 
 FOREGROUND may contain a colour, but may also contain the formatting
 instructions C<faint>, C<italic>, C<bold> and C<underline>.
