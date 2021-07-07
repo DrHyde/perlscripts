@@ -642,6 +642,7 @@ sub default_icon_types {
         python     => '',
         ruby       => '',
         rust       => '',
+        shell      => '$',
         test       => '',
         text       => '',
         tree       => 'פּ',
@@ -670,6 +671,7 @@ sub default_file_types {
             php        => [qw(php)],
             python     => [qw(py pyc pyo)],
             ruby       => [qw(rb)],
+            shell      => [qw(sh)],
             rust       => [qw(rs rlib)],
             test       => ['t'],
             # build artifacts
