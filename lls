@@ -626,6 +626,7 @@ sub default_icon_types {
         c          => '',
         'c++'      => '',
         ci         => '',
+        compressed => '',
         data       => '',
         git        => '',
         golang     => '',
@@ -654,6 +655,7 @@ sub default_file_types {
     ( 
         ext  => {
             # generic files
+            compressed => [qw(zip gz bz2 tar.gz tgz tar.bz2)],
             data       => [qw(yml json)],
             lock       => ['lock'],
             text       => [qw(md txt)],
