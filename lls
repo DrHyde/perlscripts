@@ -385,7 +385,7 @@ sub build_data ($depth, $dirent) {
 }
 
 sub colourize ($filename, $text) {
-    state %split_colour_types = map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour;
+    state $split_colour_types = { map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour };
     my $rendered_text = ($opt_force_colour || (-t STDOUT && !$opt_nocolour))
         ? join('', do { 
               # link/exec are special, we don't want to over-ride them with
@@ -395,7 +395,7 @@ sub colourize ($filename, $text) {
                              ? $generic
                              : get_icon_type_specific($filename) ||
                                $generic  || '';
-              my ($fg, $bg) = @{$split_colour_types{$type} || ['']};
+              my ($fg, $bg) = @{$split_colour_types->{$type} || ['']};
               (
                   (
                       map {
