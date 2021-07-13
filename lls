@@ -656,7 +656,7 @@ sub default_file_types {
         ext  => {
             # generic files
             compressed => [qw(zip gz bz2 tar.gz tgz tar.bz2)],
-            data       => [qw(yml json)],
+            data       => [qw(yml json sql)],
             lock       => ['lock'],
             text       => [qw(md txt)],
 
