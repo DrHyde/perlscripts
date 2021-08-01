@@ -316,7 +316,7 @@ sub work_on ($depth, @targets) {
                     # if --dirs not in effect, return everything
                     !$opt_dirs ||
                     # otherwise only return dirs if $opt_recurse in effect
-                    ($opt_recurse && -d $_)
+                    ($opt_recurse && is_dir($_))
                 } grep {
                     my $candidate = $_;
                     !grep {
@@ -338,7 +338,7 @@ sub work_on ($depth, @targets) {
     
                     push @output_lines, build_data($depth, $dirent);
                     work_on($depth + 1, $dirent)
-                        if($opt_recurse && !-l $dirent && -d $dirent && !grep {
+                        if($opt_recurse && !-l $dirent && is_dir($dirent) && !grep {
                             $dirent eq $_ ||
                             abs_path('.')."/$dirent" eq $_
                         } @opt_no_recurse);
@@ -375,9 +375,9 @@ sub build_data ($depth, $dirent) {
         $opt_show{tree}     ? ( $opt_recurse ? format_tree_art($depth) : '') : (),
         $opt_show{name}     ? colourize(
             $dirent,
-            -l $dirent                    ?
+            is_link($dirent)                    ?
                 join(' ', $dirent, '->', readlink($dirent)) :
-            $opt_git && -d "$dirent/.git" ? # $dirent eq '.git' ?
+            $opt_git && is_dir("$dirent/.git") ? # $dirent eq '.git' ?
                 "$dirent   (on ".(`git -C "$dirent" rev-parse --abbrev-ref HEAD` =~ s/\s+//r).")" :
                 $dirent
         ) : (),
@@ -475,13 +475,12 @@ sub format_size ($size) {
 }
 
 # lovingly stolen from https://metacpan.org/release/BDFOY/PerlPowerTools-1.025/source/bin/ls
+# since refactored a bit
 sub format_mode ($mode) {
     my @perms = qw(--- --x -w- -wx r-- r-x rw- rwx);
-    my @ftype = ('', qw(p c ? d ? b ? - ? l ? s ? ? ?));
     my $setids = ($mode & 07000)>>9;
     my @permstrs = @perms[($mode&0700)>>6, ($mode&0070)>>3, $mode&0007];
-    my $ftype = $ftype[($mode & 0170000)>>12];
-   
+
     if ($setids) {
         if ($setids & 01) {             # Sticky bit
             $permstrs[2] =~ s/([-x])$/$1 eq 'x' ? 't' : 'T'/e;
@@ -494,7 +493,25 @@ sub format_mode ($mode) {
         }
     }
    
-    join '', $ftype, @permstrs;
+    join '', ftype($mode), @permstrs;
+}
+
+# extracted from format_mode
+sub ftype ($mode) {
+    state @ftype = ('', qw(p c ? d ? b ? - ? l ? s ? ? ?));
+    $ftype[($mode & 0170000)>>12];
+}
+
+sub is_file ($filename) {
+    ftype(cached_stat($filename)->[2]) eq '-'
+}
+
+sub is_link ($filename) {
+    ftype(cached_stat($filename)->[2]) eq 'l'
+}
+
+sub is_dir ($filename) {
+    ftype(cached_stat($filename)->[2]) eq 'd'
 }
 
 sub sortfiles (@files) {
@@ -523,7 +540,9 @@ sub cached_stat ($filename) {
     $filename = $filename =~ /^\// ? $filename : abs_path('.')."/$filename";
 
     return $stat_cache{$filename} if(exists($stat_cache{$filename}));
-    return $stat_cache{$filename} = [lstat($filename)];
+    return $stat_cache{$filename} = [
+        lstat($filename), ((0) x 13)
+    ];
 }
 
 sub get_icon_type_specific {
@@ -537,9 +556,9 @@ sub get_icon_type_specific {
             my $type = $_;
             grep {
                 $_ eq $filename                       ||  # simple match
-                ( -d $filename && $_ eq "/$filename") ||  # directory, simple match
+                ( is_dir($filename) && $_ eq "/$filename") ||  # directory, simple match
                 (
-                    -d $original_filename &&              # //dir-contains-this
+                    is_dir($original_filename) &&              # //dir-contains-this
                     /^\/\// &&
                     -e "$original_filename/".(s/^\/\///r)
                 ) ||
@@ -580,7 +599,7 @@ sub get_icon_type_specific {
 
 sub get_icon_type_generic ($filename) {
     return
-        -l $filename ? ( do {
+        is_link($filename) ? ( do {
             my $target = readlink($filename);
             my $target_type = get_icon_type_generic($target);
             !-e $target            ? 'linkbroken' :
@@ -589,9 +608,9 @@ sub get_icon_type_generic ($filename) {
             $target_type =~ 'exec' ? 'linkexec' :
                                      'link'
         } ) :
-        -d $filename ? 'dir'      :
+        is_dir($filename) ? 'dir'      :
         -x $filename ? 'exec'     :
-        -f $filename ? 'file'     :
+        is_file($filename) ? 'file'     :
         -p $filename ? 'pipe'     :
         -S $filename ? 'socket'   :
         -b $filename ? 'blockdev' :
