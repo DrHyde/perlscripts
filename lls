@@ -378,7 +378,7 @@ sub build_data ($depth, $dirent) {
             is_link($dirent)                    ?
                 join(' ', $dirent, '->', readlink($dirent)) :
             $opt_git && is_dir("$dirent/.git") ? # $dirent eq '.git' ?
-                "$dirent   (on ".(`git -C "$dirent" rev-parse --abbrev-ref HEAD` =~ s/\s+//r).")" :
+                "$dirent   (on ".(`git -C "$dirent" rev-parse --abbrev-ref HEAD` =~ s/\s+//gr).")" :
                 $dirent
         ) : (),
     ];
@@ -418,22 +418,16 @@ my %git_cache;
 sub format_git ($dirent) {
     return '  ' if($dirent eq '.git');
     my $what_to_check = $dirent =~ /^\// ? $dirent : abs_path('.');
-    $git_cache{$what_to_check} ||= `git status -s --ignored=matching $what_to_check 2>/dev/null`;
+    if(!exists($git_cache{$what_to_check})) {
+        $git_cache{$what_to_check} = `git status -s --ignored=matching $what_to_check 2>/dev/null`;
+    }
     return '  ' if(!$git_cache{$what_to_check});
 
-    # See https://mirrors.edge.kernel.org/pub/software/scm/git/docs/git-status.html for
-    # what [AMRUD] and friends mean
-    my %git_info = map {
-        $opt_ascii ? tr/±/CR/r : $_
-    } map {
-        my $filename_in_git = substr($_, 3)
-                                 =~ s/^.* -> //r; # the new name after a git mv
-        my $status          = substr($_, 0, 2)
-                                 =~ tr/?AMRUD/X+±?-/r
-                                 =~ s/(!!|XX)/$1 eq '!!' ? 'Ig' : 'Un'/er;
-        $filename_in_git => $status;
-    } split(/\n/, $git_cache{$what_to_check});
-    return $git_info{$dirent} if(exists($git_info{$dirent}));
+    my %git_info = _parse_git_info_for_dir($what_to_check);
+
+    if(exists($git_info{$dirent})) {
+        return $git_info{$dirent};
+    };
 
     if(-d $dirent) {
         my @candidates = grep { /^\Q$dirent\E\// } keys %git_info;
@@ -446,6 +440,25 @@ sub format_git ($dirent) {
     return '  ';
 }
 
+my %git_info_cache;
+sub _parse_git_info_for_dir ($what_to_check) {
+    return %{$git_info_cache{$what_to_check}} if(exists($git_info_cache{$what_to_check}));
+
+    # See https://mirrors.edge.kernel.org/pub/software/scm/git/docs/git-status.html for
+    # what [AMRUD] and friends mean
+    return %{ $git_info_cache{$what_to_check} = {
+        map {
+            $opt_ascii ? tr/±/CR/r : $_
+        } map {
+            my $filename_in_git = substr($_, 3)
+                                     =~ s/^.* -> //r; # the new name after a git mv
+            my $status          = substr($_, 0, 2)
+                                     =~ tr/?AMRUD/X+±?-/r
+                                     =~ s/(!!|XX)/$1 eq '!!' ? 'Ig' : 'Un'/er;
+            $filename_in_git => $status;
+        } split(/\n/, $git_cache{$what_to_check})
+    }}
+}
 
 sub format_tree_art ($depth) {
     my $art = '';
