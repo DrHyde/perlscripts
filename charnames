@@ -1,0 +1,10 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use v5.10;
+
+use Encode qw(decode);
+use charnames ();
+
+say charnames::viacode(ord($_)) for (split(//, decode("UTF-8", shift)));
