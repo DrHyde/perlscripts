@@ -46,6 +46,7 @@ terms laid out in the GNU General Public Licence version 2.
 use strict;
 use warnings;
 
+use Config;
 use Cwd;
 use Template;
 use Data::Dumper;
@@ -132,6 +133,7 @@ exit unless($stuff_changed);
 open (my $fh, '>', "$target/update.sh") || die("Can't write $target/update.sh\n");
 print $fh "#!/bin/sh\n";
 print $fh join(' ', map { "\"$_\"" } (
+    $Config{perlpath},
     $0,
     '--source'  => $source,
     '--target'  => $target,
