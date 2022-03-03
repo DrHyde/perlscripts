@@ -1,0 +1,32 @@
+#!/usr/bin/env perl
+#
+# see http://routeviews.org/
+
+use strict;
+use warnings;
+
+use Net::DNS;
+
+my $doWhois = shift(@ARGV);
+unshift(@ARGV, $doWhois) unless($doWhois eq '-v');
+
+$doWhois = ($doWhois eq '-v') ? 1 : 0;
+
+my @IPs = @ARGV;
+
+die("$0 [-v] ip.add.re.ss\n\n") if(!$IPs[0]);
+
+foreach my $IP (@IPs) {
+    my($ASN, $network, $network_bits) = @{
+        my $q = Net::DNS::Resolver->new()->query(
+                    join('.',
+                        reverse(split(/\./, $IP))
+                    ).".asn.routeviews.org", "TXT", "IN"
+                );
+        ref($q) ? [($q->answer())[0]->txtdata()] : [0,0,0]
+    };
+    print "AS:\t$ASN\nnet:\t$network/$network_bits\n";
+    print "\n".`whois -h whois.radb.net as$ASN` if($doWhois);
+    # perhaps we should use the data from this URL instead ...
+    #     http://bgp.potaroo.net/cidr/autnums.html
+}
