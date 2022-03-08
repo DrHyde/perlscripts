@@ -6,7 +6,7 @@ use utf8;
 
 binmode(STDOUT, "encoding(UTF-8)");
 
-my @chars = ( '⠟', '⠯', '⠷', '⠾', '⠽', '⠻' );
+my @chars = ( '⠻', '⠽', '⠾', '⠷', '⠯', '⠟' );
 
 $SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { exit 0 };
 END { print "\e[?25h\n"; } # turn cursor on
