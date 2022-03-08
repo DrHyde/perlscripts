@@ -1,0 +1,23 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+use utf8;
+
+binmode(STDOUT, "encoding(UTF-8)");
+
+my @chars = ( '⠟', '⠯', '⠷', '⠾', '⠽', '⠻' );
+
+$SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { exit 0 };
+END { print "\e[?25h\n"; } # turn cursor on
+
+$| = 1;
+print "\e[?25l"; # turn off cursor
+$SIG{INT} = sub { print "\e[0H\e[0J\e[?25h"; exit };
+
+print $chars[-1];
+while(@chars) {
+    push(@chars, shift(@chars));
+    print "\b$chars[0]";
+    select(undef, undef, undef, 0.1);
+}
