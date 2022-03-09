@@ -262,7 +262,12 @@ my @targets = map { s{/+$}{}r } @ARGV; # sortfiles(@ARGV);
 @targets = ('.') unless(@targets);
 my @output_lines;
 my @last;
-work_on(0, @targets);
+work_on(0, grep {
+    (-l $_ || -e $_) ? 1 : do {
+        print STDERR "$0: $_: No such file or directory\n";
+        0;
+    }
+} @targets);
 
 # some columns have variable width, we need to figure out how much is needed
 my @line_max_sizes = ();
