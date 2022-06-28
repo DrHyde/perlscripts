@@ -270,7 +270,7 @@ work_on(0, grep {
 } @targets);
 
 # some columns have variable width, we need to figure out how much is needed
-my @line_max_sizes = ();
+my @line_max_sizes = (undef, 0, 0, 0);
 foreach my $line (grep { ref($_) } @output_lines) {
     foreach my $index (1, 2, 3) {
         $line_max_sizes[$index] = length($line->[$index]) if(
