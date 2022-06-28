@@ -365,8 +365,8 @@ sub build_data ($depth, $dirent) {
     return [
         $opt_show{perms}    ? format_mode(cached_stat($dirent)->[2]) : (),
         $opt_show{links}    ? cached_stat($dirent)->[3] : (),
-        $opt_show{owner}    ? (getpwuid(cached_stat($dirent)->[4]))[0] : (),
-        $opt_show{group}    ? (getgrgid(cached_stat($dirent)->[5]))[0] : (),
+        $opt_show{owner}    ? (_getpwuid(cached_stat($dirent)->[4]))[0] : (),
+        $opt_show{group}    ? (_getgrgid(cached_stat($dirent)->[5]))[0] : (),
         $opt_show{size}     ? format_size(cached_stat($dirent)->[7]) : (),
         $opt_show{date}     ? strftime(
             ( $opt_iso8601                                      ? '%Y-%m-%d %H:%M' :
@@ -388,6 +388,9 @@ sub build_data ($depth, $dirent) {
         ) : (),
     ];
 }
+
+sub _getpwuid { getpwuid($_[0]) || $_[0] }
+sub _getgrgid { getgrgid($_[0]) || $_[0] }
 
 sub colourize ($filename, $text) {
     state $split_colour_types = { map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour };
