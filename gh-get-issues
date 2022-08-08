@@ -1,0 +1,78 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use JSON;
+use LWP::UserAgent;
+use LWP::Protocol::https;
+use Term::ANSIColor;
+
+my $json = JSON->new()->allow_nonref();
+
+my $noisy = 1;
+if(@ARGV && shift() eq '--quiet') { $noisy-- }
+
+my $github_ua   = LWP::UserAgent->new();
+my $github_auth = $ENV{GH_AUTH} ||
+    die(colored(['red'], "You need to set GH_AUTH\n"));
+my $next_url    = "https://$github_auth\@api.github.com/users/DrHyde/repos";
+
+my $issues = {};
+
+while($next_url) {
+    my $github_req = HTTP::Request->new(GET => $next_url);
+    warn "  fetching $next_url\n" if($noisy);
+    my $github_res = $github_ua->request($github_req);
+    if(!$github_res->is_success()) {
+        die("Couldn't fetch $next_url; ".$github_req->status_line()."\n");
+    }
+
+    if($github_res->header('Link') =~ /<([^>]+)>;\s+rel="next"/) {
+        $next_url = $1;
+        $next_url =~ s/(https?:\/\/)/$1$github_auth\@/;
+    } else {
+        $next_url = '';
+    }
+
+    my $repos = $json->decode($github_res->content());
+    foreach my $repo (@{$repos}) {
+        my $repo_name = $repo->{name};
+        my $this_repo = $issues->{$repo_name} = [];
+
+        (my $public_name = $repo_name) =~ s/perl-modules-//;
+        my $push_time = $repo->{pushed_at};
+
+        my $issues_url = $repo->{url}.'/issues?state=all';
+        $issues_url =~ s/(https?:\/\/)/$1$github_auth\@/;
+        $github_req = HTTP::Request->new(GET => $issues_url);
+        warn "  fetching $issues_url\n" if($noisy);
+        my $github_res = $github_ua->request($github_req);
+        if(!$github_res->is_success()) {
+            die("Couldn't fetch $issues_url; ".$github_req->status_line()."\n");
+        }
+        foreach my $issue (@{$json->decode($github_res->content())}) {
+            (my $issue_url = $issue->{url}) =~ s/(https?:\/\/)/$1$github_auth\@/;
+            $github_req = HTTP::Request->new(GET => $issue_url);
+            warn "  fetching $issue_url\n" if($noisy);
+            my $github_issue_res = $github_ua->request($github_req);
+            if(!$github_issue_res->is_success()) {
+                die("Couldn't fetch $issue_url; ".$github_req->status_line()."\n");
+            }
+
+            (my $comments_url = $issue->{comments_url}) =~ s/(https?:\/\/)/$1$github_auth\@/;
+            $github_req = HTTP::Request->new(GET => $comments_url);
+            warn "  fetching $comments_url\n" if($noisy);
+            my $github_comments_res = $github_ua->request($github_req);
+            if(!$github_comments_res->is_success()) {
+                die("Couldn't fetch $comments_url; ".$github_req->status_line()."\n");
+            }
+            push @{$this_repo}, {
+                issue    => $json->decode($github_issue_res->content()),
+                comments => $json->decode($github_comments_res->content())
+            };
+        }
+    }
+}
+
+print JSON->new->ascii->encode($issues);
