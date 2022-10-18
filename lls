@@ -96,6 +96,7 @@ GetOptions(
     'long|l'     => \my $opt_long,
     'all|a'      => \my $opt_all,
     'hidden|A'   => \my $opt_hidden,
+    'bytes|b'    => \my $opt_bytes,
     'dirs|d'     => \my $opt_dirs,
     'reverse|r'  => \my $opt_reverse,
     'time|t'     => \my $opt_time,
@@ -269,21 +270,30 @@ work_on(0, grep {
     }
 } @targets);
 
-# some columns have variable width, we need to figure out how much is needed
-my @line_max_sizes = (undef, 0, 0, 0);
+# some columns have variable width, we need to figure out how much is needed.
+# assuming we display all columns, the variable width ones are in positions 1 - 4
+my @line_max_sizes = (0, 0, 0, 0, 0);
+my %index_of_field = (
+    # for each var-width column which is turned on, how many of those to its left are turned on?
+    links => $opt_show{links} ? _how_many_set(\%opt_show, qw(perms)) : undef,
+    owner => $opt_show{owner} ? _how_many_set(\%opt_show, qw(perms links)) : undef,
+    group => $opt_show{group} ? _how_many_set(\%opt_show, qw(perms links owner)) : undef,
+    size  => $opt_show{size}  ? _how_many_set(\%opt_show, qw(perms links owner group)) : undef,
+);
+
 foreach my $line (grep { ref($_) } @output_lines) {
-    foreach my $index (1, 2, 3) {
+    foreach my $index (grep { defined } @index_of_field{qw(links owner group size)}) {
         $line_max_sizes[$index] = length($line->[$index]) if(
-            !defined($line_max_sizes[$index]) ||
-            length($line->[$index]) > $line_max_sizes[$index]
+            # !defined($line_max_sizes[$index]) ||
+            (defined($line->[$index]) && length($line->[$index]) > $line_max_sizes[$index])
         )
     }
 }
 my $format = $opt_show{perms} ? '%s' : '';
-$format   .= $opt_show{links} ? ' %'.($line_max_sizes[1] + 1).'d' : '';
-$format   .= $opt_show{owner} ? ' %'.($line_max_sizes[2] + 1).'s' : '';
-$format   .= $opt_show{group} ? ' %'.($line_max_sizes[3] + 1).'s' : '';
-$format   .= $opt_show{size}  ? ' %6s' : '';
+$format   .= $opt_show{links} ? ' %'.($line_max_sizes[$index_of_field{links}] + 1).'d' : '';
+$format   .= $opt_show{owner} ? ' %'.($line_max_sizes[$index_of_field{owner}] + 1).'s' : '';
+$format   .= $opt_show{group} ? ' %'.($line_max_sizes[$index_of_field{group}] + 1).'s' : '';
+$format   .= $opt_show{size}  ? ' %'.($line_max_sizes[$index_of_field{size}]  + 1).'s' : '';
 $format   .= $opt_show{date}  ? ' %s'  : '';
 $format   .= $opt_show{icons} ? ' %s'  : '';
 $format   .= $opt_show{git}   ? ' %s'  : '';
@@ -392,6 +402,12 @@ sub build_data ($depth, $dirent) {
 sub _getpwuid { getpwuid($_[0]) || $_[0] }
 sub _getgrgid { getgrgid($_[0]) || $_[0] }
 
+sub _how_many_set($hash, @keys) {
+    my $count = 0;
+    $count++ foreach(grep { $hash->{$_} } @keys);
+    $count;
+}
+
 sub colourize ($filename, $text) {
     state $split_colour_types = { map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour };
     my $rendered_text = ($opt_force_colour || (-t STDOUT && !$opt_nocolour))
@@ -487,6 +503,7 @@ sub format_tree_art ($depth) {
 }
 
 sub format_size ($size) {
+    return $size if($opt_bytes);
     my @multipliers = qw(B K M G T);
     while($size > 1024) {
         $size >>= 10;
