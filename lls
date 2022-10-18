@@ -318,7 +318,7 @@ sub work_on ($depth, @targets) {
                 push @output_lines, "" if($have_already_rendered);
                 push @output_lines, "$target:";
             }
-    
+
             if($opt_recurse && !$depth) {
                 $opt_recurse = 0;
                 push @output_lines, build_data(0, $target);
@@ -350,7 +350,7 @@ sub work_on ($depth, @targets) {
                     $last[$depth] = !@dirents;
                     next if($dirent =~ /^\.\.?$/ && (($opt_recurse && $depth + 1) || !$opt_all));
                     next if($dirent =~ /^\./     && !($opt_all || $opt_hidden));
-    
+
                     push @output_lines, build_data($depth, $dirent);
                     work_on($depth + 1, $dirent)
                         if($opt_recurse && !-l $dirent && is_dir($dirent) && !grep {
@@ -411,7 +411,7 @@ sub _how_many_set($hash, @keys) {
 sub colourize ($filename, $text) {
     state $split_colour_types = { map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour };
     my $rendered_text = ($opt_force_colour || (-t STDOUT && !$opt_nocolour))
-        ? join('', do { 
+        ? join('', do {
               # link/exec are special, we don't want to over-ride them with
               # something more specialized
               my $generic = get_icon_type_generic($filename);
@@ -530,7 +530,7 @@ sub format_mode ($mode) {
             $permstrs[1] =~ s/([-x])$/$1 eq 'x' ? 's' : 'S'/e;
         }
     }
-   
+
     join '', ftype($mode), @permstrs;
 }
 
@@ -557,7 +557,7 @@ sub sortfiles (@files) {
     @files = sort {
        $sorter->($a, $b) || ($a cmp $b)
     } @files;
-    
+
     if($opt_reverse) { return reverse @files }
      else { return @files }
 }
@@ -588,8 +588,8 @@ sub get_icon_type_specific {
     my $filename = basename($original_filename);
     (my $ext = $filename) =~ s/^.*\.//;
     $ext = '' if($ext eq $filename);
-    
-    my $type = 
+
+    my $type =
         ( grep {
             my $type = $_;
             grep {
@@ -614,7 +614,7 @@ sub get_icon_type_specific {
     $type ||=
         ( grep {
             my $type = $_;
-            if(-f $filename && open(my $shebang_fh, '<', $filename)) { 
+            if(-f $filename && open(my $shebang_fh, '<', $filename)) {
                 binmode($shebang_fh); # binaries are not gonna be valid UTF-8!
                 my $shebang_line = <$shebang_fh>;
                 grep {
@@ -709,7 +709,7 @@ sub default_icon_types {
 }
 
 sub default_file_types {
-    ( 
+    (
         ext  => {
             # generic files
             compressed => [qw(zip gz bz2 tar.gz tgz tar.bz2)],
@@ -722,7 +722,7 @@ sub default_file_types {
             c          => [qw(c h)],
             golang     => [qw(go)],
             haskell    => [qw(hs)],
-            html       => [qw(htm html)], 
+            html       => [qw(htm html)],
             java       => [qw(java)],
             javascript => [qw(js)],
             lisp       => [qw(lsp lisp el elc)],
@@ -853,15 +853,15 @@ Compare:
     $ ls -lR a
     total 0
     drwxr-xr-x  3 david  staff  102  2 Jul 12:44 b
-    
+
     a/b:
     total 0
     drwxr-xr-x  3 david  staff  102  2 Jul 12:44 c
-    
+
     a/b/c:
     total 0
     drwxr-xr-x  2 david  staff  68  2 Jul 12:44 d
-    
+
     a/b/c/d:
 
 and:
@@ -1007,7 +1007,7 @@ control them using the following command line arguments.
 =item --name_type FILENAME TYPE
 
 Map files with name FILENAME to type TYPE. If this is specified all the
-type map 
+type map
 defaults are turned off unless you explicitly turn them back on. Can be used
 multiple times.
 
