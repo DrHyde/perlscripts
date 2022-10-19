@@ -795,7 +795,8 @@ If you are not using iTerm on a Mac then you are computering wrong.
 Turns on all the available columns. Without any other options this will be the
 same as C<ls -l> but with an extra column of icons before the filenames.
 
-See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES, ICONS, AND COLOURS">.
+See also L</"DISPLAY OPTIONS"> and L</"FILE TYPES, ICONS, AND COLOURS"> in the
+full help (use the C<-H> option to see that).
 
 =item -a | --all
 
@@ -915,6 +916,11 @@ output the tree will be rendered in ASCII.
 Use Unicode (encoded as utf-8) for output. This is the default. Over-rides any
 C<--ascii>, and does so before that has a chance to suppress icons.
 
+=item -b | --bytes
+
+In conjunction with C<--show_size> or C<-l>, file sizes are always shown
+in bytes.
+
 =item -H | --HELP (all caps)
 
 Show more help
@@ -964,8 +970,8 @@ Show the file's group
 
 =item --show_size
 
-Show the file's size. NB that this is shown as the number of
-bytes/KiB/MiB/GiB/TiB.
+Show the file's size. NB that this is by default shown as the number of
+bytes/KiB/MiB/GiB/TiB with a suitable suffix. See also C<--bytes>.
 
 =item --show_date
 
