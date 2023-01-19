@@ -108,6 +108,7 @@ GetOptions(
     'utf8|8'     => \my $opt_utf8,
     'ignore|I=s' => \my @opt_ignore,
     'iso8601'    => \my $opt_iso8601,
+    'iso8601s'   => \my $opt_iso8601_seconds,
     'noiso8601'  => \my $opt_noiso8601,
     'noicons'    => \my $opt_noicons,
     'help|h|?'   => \my $help,
@@ -186,6 +187,7 @@ exit(0) if($opt_show_default_types || $opt_show_default_icons || $opt_show_defau
 # some things imply other things
 $opt_ascii   = 0 if($opt_utf8);
 $opt_noicons = 1 if($opt_ascii);
+$opt_iso8601 = 1 if($opt_iso8601_seconds);
 $opt_iso8601 = 0 if($opt_noiso8601);
 
 # some options are incompatible with each other
@@ -372,6 +374,12 @@ sub work_on ($depth, @targets) {
 sub build_data ($depth, $dirent) {
     my $icons    = get_icons($dirent =~ /^\// ? $dirent : abs_path('.')."/$dirent");
 
+    my $datetime_fmt =
+        $opt_iso8601 && !$opt_iso8601_seconds             ? '%Y-%m-%d %H:%M' :
+        $opt_iso8601 &&  $opt_iso8601_seconds             ? '%Y-%m-%d %H:%M:%S' :
+        time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" :
+                                                            "%d %b  %Y";
+
     return [
         $opt_show{perms}    ? format_mode(cached_stat($dirent)->[2]) : (),
         $opt_show{links}    ? cached_stat($dirent)->[3] : (),
@@ -379,10 +387,7 @@ sub build_data ($depth, $dirent) {
         $opt_show{group}    ? (_getgrgid(cached_stat($dirent)->[5]))[0] : (),
         $opt_show{size}     ? format_size(cached_stat($dirent)->[7]) : (),
         $opt_show{date}     ? strftime(
-            ( $opt_iso8601                                      ? '%Y-%m-%d %H:%M' :
-              time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" :
-                                                                  "%d %b  %Y"
-            ),
+            $datetime_fmt,
             (localtime(cached_stat($dirent)->[9]))[0 .. 5]
         ) : (),
         $opt_show{icons}    ? $icons : (),
@@ -900,11 +905,15 @@ caution!
 
 =item --iso8601
 
-Show date/time in ISO 8601:2004 format
+Show date/time in ISO 8601:2004 format (without seconds)
+
+=item --iso8601s
+
+Show date/time in ISO 8601:2004 format (with seconds)
 
 =item --noiso8601
 
-Turn off C<--iso8601>. This is the default.
+Turn off C<--iso8601> / C<--iso8601s>. This is the default.
 
 =item -7 | --ascii
 
