@@ -15,7 +15,8 @@ use Getopt::Long;
 Getopt::Long::Configure(qw(no_ignore_case));
 use Pod::Usage;
 
-use Cwd qw(abs_path getcwd);
+use Cwd qw(cwd);
+my @cwd = (cwd()); # yuck, global!
 use File::Basename;
 use File::cd;
 use File::Slurper qw(read_text);
@@ -25,6 +26,11 @@ use Color::ANSI::Util ();
 use Term::ANSIColor qw(FAINT ITALIC BOLD UNDERLINE RESET);
 use Graphics::ColorNames;
 my $pal = Graphics::ColorNames->new();
+
+# if we chdir to ., .., or something with a / in we lazily call cwd to figure out
+# where we are afterwards, otherwise we append strings to avoid expensive calls to
+# cwd
+my $check_need_cwd_re = qr/^(\.|\.\.)|\//;
 
 # read defaults from ~/.config/lls/*
 foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
@@ -327,6 +333,8 @@ sub work_on ($depth, @targets) {
                 $opt_recurse = 1;
             }
             cd $target => sub {
+                push @cwd, $target =~ /$check_need_cwd_re/ ? cwd() : "$cwd[-1]/$target";
+
                 $prev_rendered_was_dir = 1;
                 opendir(my $dh, '.') || die("Couldn't read $target: $!\n");
                 my @dirents = grep {
@@ -338,12 +346,12 @@ sub work_on ($depth, @targets) {
                     my $candidate = $_;
                     !grep {
                         $candidate eq $_                        || # simple match
-                        abs_path('.')."/$candidate" eq $_       || # /full/path
+                        "$cwd[-1]/$candidate" eq $_                 || # /full/path
                         ($_ =~ /^\./ && $candidate =~ /\Q$_\E/) || # .extension
                         ($_ =~ /^\Q$candidate\E\// && -e $_)    || # dir/contains
                         (
                             $_ =~ /^\Q$candidate\E\[(.*)\]/ &&     # file[within]
-                            basename(abs_path('.')) eq $1
+                            basename($cwd[-1]) eq $1
                         )
                     } @opt_ignore
                 } sortfiles(readdir($dh));
@@ -357,11 +365,12 @@ sub work_on ($depth, @targets) {
                     work_on($depth + 1, $dirent)
                         if($opt_recurse && !-l $dirent && is_dir($dirent) && !grep {
                             $dirent eq $_ ||
-                            abs_path('.')."/$dirent" eq $_
+                            "$cwd[-1]/$dirent" eq $_
                         } @opt_no_recurse);
                 }
                 closedir($dh);
             };
+            pop @cwd;
         } else {
             push @output_lines, "" if($prev_rendered_was_dir);
             push @output_lines, build_data($depth, $target);
@@ -372,23 +381,24 @@ sub work_on ($depth, @targets) {
 }
 
 sub build_data ($depth, $dirent) {
-    my $icons    = get_icons($dirent =~ /^\// ? $dirent : abs_path('.')."/$dirent");
+    my $icons    = get_icons($dirent =~ /^\// ? $dirent : "$cwd[-1]/$dirent");
 
     my $datetime_fmt =
         $opt_iso8601 && !$opt_iso8601_seconds             ? '%Y-%m-%d %H:%M' :
         $opt_iso8601 &&  $opt_iso8601_seconds             ? '%Y-%m-%d %H:%M:%S' :
         time - cached_stat($dirent)->[9] < 60*60*24*365/2 ? "%d %b %H:%M" :
                                                             "%d %b  %Y";
+    my @this_dirent_stat = @{cached_stat($dirent)};
 
     return [
-        $opt_show{perms}    ? format_mode(cached_stat($dirent)->[2]) : (),
-        $opt_show{links}    ? cached_stat($dirent)->[3] : (),
-        $opt_show{owner}    ? (_getpwuid(cached_stat($dirent)->[4]))[0] : (),
-        $opt_show{group}    ? (_getgrgid(cached_stat($dirent)->[5]))[0] : (),
-        $opt_show{size}     ? format_size(cached_stat($dirent)->[7]) : (),
+        $opt_show{perms}    ? format_mode($this_dirent_stat[2]) : (),
+        $opt_show{links}    ? $this_dirent_stat[3] : (),
+        $opt_show{owner}    ? (_getpwuid($this_dirent_stat[4]))[0] : (),
+        $opt_show{group}    ? (_getgrgid($this_dirent_stat[5]))[0] : (),
+        $opt_show{size}     ? format_size($this_dirent_stat[7]) : (),
         $opt_show{date}     ? strftime(
             $datetime_fmt,
-            (localtime(cached_stat($dirent)->[9]))[0 .. 5]
+            (localtime($this_dirent_stat[9]))[0 .. 5]
         ) : (),
         $opt_show{icons}    ? $icons : (),
         $opt_show{git}      ? format_git($dirent) : (),
@@ -446,7 +456,7 @@ sub colourize ($filename, $text) {
 my %git_cache;
 sub format_git ($dirent) {
     return '  ' if($dirent eq '.git');
-    my $what_to_check = $dirent =~ /^\// ? $dirent : abs_path('.');
+    my $what_to_check = $dirent =~ /^\// ? $dirent : $cwd[-1];
     if(!exists($git_cache{$what_to_check})) {
         $git_cache{$what_to_check} = `git status -s --ignored=matching $what_to_check 2>/dev/null`;
     }
@@ -580,7 +590,7 @@ sub sorter {
 
 my %stat_cache;
 sub cached_stat ($filename) {
-    $filename = $filename =~ /^\// ? $filename : abs_path('.')."/$filename";
+    $filename = index($filename, '/') == 0 ? $filename : "$cwd[-1]/$filename";
 
     return $stat_cache{$filename} if(exists($stat_cache{$filename}));
     return $stat_cache{$filename} = [
@@ -599,7 +609,7 @@ sub get_icon_type_specific {
             my $type = $_;
             grep {
                 $_ eq $filename                       ||  # simple match
-                ( is_dir($filename) && $_ eq "/$filename") ||  # directory, simple match
+                ( $_ eq "/$filename" && is_dir($filename) ) ||  # directory, simple match
                 (
                     is_dir($original_filename) &&              # //dir-contains-this
                     /^\/\// &&
@@ -607,7 +617,7 @@ sub get_icon_type_specific {
                 ) ||
                 (
                     $_ =~ /^\Q$filename\E\[(.*)\]/ &&     # file[within]
-                    basename(abs_path('.')) eq $1
+                    basename($cwd[-1]) eq $1
                 )
             } @{$opt_type{name}->{$type}};
         } keys %{$opt_type{name}} )[0];
@@ -619,7 +629,7 @@ sub get_icon_type_specific {
     $type ||=
         ( grep {
             my $type = $_;
-            if(-f $filename && open(my $shebang_fh, '<', $filename)) {
+            if(-f $filename && -x $filename && open(my $shebang_fh, '<', $filename)) {
                 binmode($shebang_fh); # binaries are not gonna be valid UTF-8!
                 my $shebang_line = <$shebang_fh>;
                 grep {
@@ -749,6 +759,7 @@ sub default_file_types {
             exec   => [qw(/bin)],
             git    => [qw(.github .gitignore .git //.git)],
             list   => [qw(CHANGES CHANGELOG Changes Changelog)],
+            rust   => [qw(Cargo.toml clippy.toml)],
             test   => [qw(/t)],
             text   => [qw(README)],
             tree   => [qw(Makefile)],
@@ -1014,8 +1025,8 @@ are shown below:
 The second icon is determined based on the filename (in the various
 permutations specified for C<--name_type>), or if that doesn't match based on
 file extension, or if that doesn't match by looking for a shebang line at the
-start of a file. There are some vaguely sensible defaults built in, but you can
-control them using the following command line arguments.
+start of an executable file. There are some vaguely sensible defaults built in,
+but you can control them using the following command line arguments.
 
 =over
 
@@ -1047,11 +1058,11 @@ multiple times.
 
 This is very much a last resort as it involves opening and reading files, which
 is slow. We will look for a shebang line at the start of the file which
-contains EXECUTABLE. It will match both C<#!/path/to/$executable> and
-C<#!/usr/bin/env $executable>.
+contains EXECUTABLE if the file is executable. It will match both
+C<#!/path/to/$executable> and C<#!/usr/bin/env $executable>.
 
 There are no defaults for this, and its presence will I<not> turn off the
-default filename/extension type mapping.
+default filename/extension type mapping, which take precedence.
 
 =item --default_types
 
