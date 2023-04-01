@@ -624,7 +624,7 @@ sub get_icon_type_specific {
     $type ||=
         ( grep {
             my $type = $_;
-            grep { $_ eq $ext } @{$opt_type{ext}->{$type}};
+            grep { lc($_) eq lc($ext) } @{$opt_type{ext}->{$type}};
         } keys %{$opt_type{ext}} )[0];
     $type ||=
         ( grep {
@@ -1048,11 +1048,10 @@ directory is called DIR will match.
 
 =item --ext_type EXTENSION TYPE
 
-Map files with extension EXTENSION to type TYPE, unless the file's entire name
-matches something specified using C<--name_type>. If this is specified all the
-type map
-defaults are turned off unless you explicitly turn them back on. Can be used
-multiple times.
+Map files with extension EXTENSION, case-insensitively, to type TYPE, unless
+the file's entire name matches something specified using C<--name_type>. If
+this is specified all the type map defaults are turned off unless you
+explicitly turn them back on. Can be used multiple times.
 
 =item --shebang_type EXECUTABLE TYPE
 
