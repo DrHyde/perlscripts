@@ -1,0 +1,14 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+my $target = pop(@ARGV);
+
+open(my $fh, '>>', "ffconcat.$$.tmp") || die("Couldn't write ffconcat.$$.tmp\n");
+foreach my $part (@ARGV) {
+    print $fh "file '$part'\n";
+}
+
+system(qw(ffmpeg -f concat -safe 0 -i), "ffconcat.$$.tmp", qw(-c copy), $target);
+unlink("ffconcat.$$.tmp");
