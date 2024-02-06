@@ -3,6 +3,7 @@
 use strict;
 use warnings;
 
+use Data::Dumper;
 use JSON;
 use LWP::UserAgent;
 use LWP::Protocol::https;
@@ -20,13 +21,31 @@ my $next_url    = "https://$github_auth\@api.github.com/users/DrHyde/repos";
 
 my $issues = {};
 
+sub get_with_retries {
+    my($ua, $req, $tries) = @_;
+    my $sleep_length = 30;
+    my $this_try = 0;
+    my $res;
+    while($this_try++ < $tries) {
+        $res = $ua->request($req);
+        if($res->is_success) {
+            return $res
+        }
+        warn("  ... retrying (retry $this_try)\n") if($noisy);
+        sleep $sleep_length;
+        $sleep_length += 30;
+    }
+    die(
+        "Couldn't fetch.\n\n".
+        Dumper($req).
+        Dumper($res)
+    );
+}
+
 while($next_url) {
     my $github_req = HTTP::Request->new(GET => $next_url);
     warn "  fetching $next_url\n" if($noisy);
-    my $github_res = $github_ua->request($github_req);
-    if(!$github_res->is_success()) {
-        die("Couldn't fetch $next_url; ".$github_req->status_line()."\n");
-    }
+    my $github_res = get_with_retries($github_ua, $github_req, 3);
 
     if($github_res->header('Link') =~ /<([^>]+)>;\s+rel="next"/) {
         $next_url = $1;
@@ -44,33 +63,44 @@ while($next_url) {
         my $push_time = $repo->{pushed_at};
 
         my $issues_url = $repo->{url}.'/issues?state=all';
+    ISSUESPAGE:
         $issues_url =~ s/(https?:\/\/)/$1$github_auth\@/;
         $github_req = HTTP::Request->new(GET => $issues_url);
         warn "  fetching $issues_url\n" if($noisy);
-        my $github_res = $github_ua->request($github_req);
-        if(!$github_res->is_success()) {
-            die("Couldn't fetch $issues_url; ".$github_req->status_line()."\n");
-        }
+        my $github_res = get_with_retries($github_ua, $github_req, 3);
         foreach my $issue (@{$json->decode($github_res->content())}) {
-            (my $issue_url = $issue->{url}) =~ s/(https?:\/\/)/$1$github_auth\@/;
+            my $issue_url = $issue->{url};
+            if($issue->{user}->{login} eq 'dependabot[bot]') {
+                warn "  NOT fetching $issue_url: dependabot\n" if($noisy);
+                next;
+            }
+            $issue_url =~ s/(https?:\/\/)/$1$github_auth\@/;
             $github_req = HTTP::Request->new(GET => $issue_url);
             warn "  fetching $issue_url\n" if($noisy);
-            my $github_issue_res = $github_ua->request($github_req);
-            if(!$github_issue_res->is_success()) {
-                die("Couldn't fetch $issue_url; ".$github_req->status_line()."\n");
-            }
+            my $github_issue_res = get_with_retries($github_ua, $github_req, 3);
 
-            (my $comments_url = $issue->{comments_url}) =~ s/(https?:\/\/)/$1$github_auth\@/;
+            my $comments_url = $issue->{comments_url};
+            my @this_issue_comments;
+        COMMENTSPAGE:
+            $comments_url =~ s/(https?:\/\/)/$1$github_auth\@/;
             $github_req = HTTP::Request->new(GET => $comments_url);
             warn "  fetching $comments_url\n" if($noisy);
-            my $github_comments_res = $github_ua->request($github_req);
-            if(!$github_comments_res->is_success()) {
-                die("Couldn't fetch $comments_url; ".$github_req->status_line()."\n");
+            my $github_comments_res = get_with_retries($github_ua, $github_req, 3);
+            push  @this_issue_comments, @{$json->decode($github_comments_res->content())};
+            if($github_comments_res->header('Link') && $github_comments_res->header('Link') =~ /<([^>]+)>;\s+rel="next"/) {
+                $comments_url = $1;
+                goto COMMENTSPAGE;
             }
+
             push @{$this_repo}, {
                 issue    => $json->decode($github_issue_res->content()),
-                comments => $json->decode($github_comments_res->content())
+                comments => \@this_issue_comments
             };
+        }
+
+        if($github_res->header('Link') && $github_res->header('Link') =~ /<([^>]+)>;\s+rel="next"/) {
+            $issues_url = $1;
+            goto ISSUESPAGE;
         }
     }
 }
