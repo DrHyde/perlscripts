@@ -13,7 +13,6 @@ use experimental qw(signatures);
 use Data::Dumper::Concise;
 use Getopt::Long;
 Getopt::Long::Configure(qw(no_ignore_case));
-use Pod::Usage;
 
 use Cwd qw(cwd);
 my @cwd = (cwd()); # yuck, global!
@@ -164,8 +163,12 @@ GetOptions(
 # now post-process args
 
 # first, with these we can just spit some output and stop
-if($help) { pod2usage(0) }
-if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
+if($help || $HELP) {
+    require Pod::Usage;
+    if($help) { pod2usage(0) }
+    if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
+}
+
 if($opt_show_default_types) {
     my %defaults = default_file_types();
     foreach my $name_part (sort keys %defaults) {
@@ -381,8 +384,6 @@ sub work_on ($depth, @targets) {
 }
 
 sub build_data ($depth, $dirent) {
-    my $icons    = get_icons($dirent =~ /^\// ? $dirent : "$cwd[-1]/$dirent");
-
     my $datetime_fmt =
         $opt_iso8601 && !$opt_iso8601_seconds             ? '%Y-%m-%d %H:%M' :
         $opt_iso8601 &&  $opt_iso8601_seconds             ? '%Y-%m-%d %H:%M:%S' :
@@ -400,7 +401,7 @@ sub build_data ($depth, $dirent) {
             $datetime_fmt,
             (localtime($this_dirent_stat[9]))[0 .. 5]
         ) : (),
-        $opt_show{icons}    ? $icons : (),
+        $opt_show{icons}    ? get_icons($dirent =~ /^\// ? $dirent : "$cwd[-1]/$dirent") : (),
         $opt_show{git}      ? format_git($dirent) : (),
         $opt_show{tree}     ? ( $opt_recurse ? format_tree_art($depth) : '') : (),
         $opt_show{name}     ? colourize(
