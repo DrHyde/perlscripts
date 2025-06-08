@@ -1,0 +1,5 @@
+#!/usr/bin/env perl
+
+use Date::Roman;
+
+print "hodie ".Date::Roman->new()->as_string()." est\n";
