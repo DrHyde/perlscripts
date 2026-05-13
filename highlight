@@ -15,6 +15,7 @@ my %colour_index = (
     map { $_ => $_ } (16 .. 255)
 );
 my $colour_names_re = '^--('.join('|', @colour_names).')$';
+my $reader = sub { <STDIN> };
 
 my @highlights = ();
 
@@ -23,13 +24,17 @@ while(my $arg = $ARGV[0]) {
     $arg eq '--show-colours'      ? show_colours() :
     $arg eq '--list-colours'      ? do { print "--$_\n" foreach(@colour_names); exit(0); } :
     $arg =~ /^-(-help|h)$/        ? do { print usage(); exit(0); } :
+    $arg =~ /^-(-file|f)$/        ? prepare_file_reader(\@ARGV) :
     $arg =~ qr/$colour_names_re/  ? push_named_colour($arg, \@highlights, \@ARGV) :
     $arg eq '--colour'            ? push_any_colour($arg, \@highlights, \@ARGV) :
     $arg =~ /^--/                 ? die("$arg: invalid argument\n".usage()) :
                                     push_re($arg, \@highlights, \@ARGV);
 }
 
-my $tagged_text = String::Tagged::Terminal->parse_terminal(join('', <STDIN>));
+die("You need to tell me what to highlight\n".usage())
+    unless(@highlights);
+
+my $tagged_text = String::Tagged::Terminal->parse_terminal(join('', $reader->()));
 my $plain_text  = $tagged_text->str();
 
 foreach my $highlight (@highlights) {
@@ -43,6 +48,22 @@ foreach my $highlight (@highlights) {
     }
 }
 print $tagged_text->build_terminal;
+
+sub prepare_file_reader {
+    my $args = shift;
+    shift @{$args};
+    my $file = shift(@{$args}) || die("--file: Expected 1 arg\n".usage());
+
+    # need to accept pipes as well as files, so <(...) works
+    if(-r $file && (-f $file || -p $file)) {
+        $reader = sub {
+            open(my $fh, '<', $file) || die("--file: can't open $file: $!\n");
+            <$fh>;
+        };
+    } else {
+        die("--file: can't read $file\n".usage());
+    }
+}
 
 sub push_named_colour {
     my($arg, $target, $source) = @_;
@@ -154,14 +175,19 @@ highlight [--named_colour re] [--colour index re] ... [re ...]
 Read from standard input and write to standard output, highlighting any text
 that matches the supplied Perl regular expressions.
 
-Arguments:
+Arguments that can be repeated many times:
   re                     Highlight matches in yellow
   --named_colour re      Highlight matches in the named colour. See
                          --list-colours for available names
   --colour index re      Highlight matches in the specified numeric colour.
                          See --show-colours. Named colours can also be used.
 
-The following will act and then immediately exit ignoring all other arguments:
+Arguments where only the last instance encountered will have any effect:
+  -f, --file file        The file to read and highlight. Defaults to STDIN.
+                         Must be either a real file or a pipe.
+
+Arguments which will act the moment they are seen and then immediately exit
+ignoring all other arguments:
   --list-colours         List available colours
   --show-colours         Show available colours
   --shell-completions    Output Bash shell completions
@@ -171,6 +197,10 @@ In this example, 'warning' will be highlighted in yellow, 'fail' or 'error'
 in red, and 'ok' in green:
 
   some_command | highlight --green 'ok' warning --red 'fail|error'
+
+We assume that you are using a terminal configured to display at least 256
+colours, with a black background, and light grey text. If you aren't then
+you are not computering properly.
 
 }
 }
