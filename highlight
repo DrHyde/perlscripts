@@ -1,0 +1,176 @@
+#!/usr/bin/env perl
+
+use strict;
+use warnings;
+
+use String::Tagged::Terminal;
+
+my @colour_names = qw(
+    black red green yellow blue purple cyan
+    lightgrey darkgrey salmon lightgreen lightyellow
+    lightblue pink brightcyan white
+);
+my %colour_index = (
+    (map { $colour_names[$_] => $_ } (0 .. 15)),
+    map { $_ => $_ } (16 .. 255)
+);
+my $colour_names_re = '^--('.join('|', @colour_names).')$';
+
+my @highlights = ();
+
+while(my $arg = $ARGV[0]) {
+    $arg eq '--shell-completions' ? show_completions() :
+    $arg eq '--show-colours'      ? show_colours() :
+    $arg eq '--list-colours'      ? do { print "--$_\n" foreach(@colour_names); exit(0); } :
+    $arg =~ /^-(-help|h)$/        ? do { print usage(); exit(0); } :
+    $arg =~ qr/$colour_names_re/  ? push_named_colour($arg, \@highlights, \@ARGV) :
+    $arg eq '--colour'            ? push_any_colour($arg, \@highlights, \@ARGV) :
+    $arg =~ /^--/                 ? die("$arg: invalid argument\n".usage()) :
+                                    push_re($arg, \@highlights, \@ARGV);
+}
+
+my $tagged_text = String::Tagged::Terminal->parse_terminal(join('', <STDIN>));
+my $plain_text  = $tagged_text->str();
+
+foreach my $highlight (@highlights) {
+    my($colour, $re) = @{$highlight};
+    while($plain_text =~ /($re)/g) {
+        my $start = $-[0];
+        my $end   = $+[0];
+        $tagged_text->unapply_tag($start, $end - $start, 'fgindex');
+        $tagged_text->unapply_tag($start, $end - $start, 'bgindex');
+        $tagged_text->apply_tag($start, $end - $start, 'fgindex', $colour);
+    }
+}
+print $tagged_text->build_terminal;
+
+sub push_named_colour {
+    my($arg, $target, $source) = @_;
+
+    if(@{$source} >= 2) {
+        my $colour = $colour_index{shift(@{$source}) =~ s/^--//r};
+        my $re     = shift(@{$source});
+        push @{$target}, [$colour, $re];
+    } else {
+        die("$arg: Expected 1 arg\n".usage());
+    }
+}
+
+sub push_any_colour {
+    my($arg, $target, $source) = @_;
+
+    if(@{$source} >= 3) {
+        shift @{$source};
+        my $colour = (shift(@{$source}) =~ s/^--//r);
+        die("$arg: '$colour' is not valid\n".usage()) unless(exists($colour_index{$colour}));
+        my $re     = shift(@{$source});
+        push @{$target}, [$colour_index{$colour}, $re];
+    } else {
+        die("$arg: Expected 2 args\n".usage());
+    }
+}
+
+sub push_re {
+    my($arg, $target, $source) = @_;
+
+    push @{$target}, [ 3, $source->[0] ]; # default to yellow
+    shift @{$source};
+}
+
+sub show_colours {
+    print "\n";
+    foreach my $i (0 .. 15) {
+        print "\e[38;5;0m";
+        if(grep { $_ == $i } (0, 1, 4, 8)) {
+            print "\e[38;5;15m";
+        }
+        printf "\e[48;5;${i}m%s \e[0m ", map {
+            my $leading = my $trailing = 8 - length($_) / 2;
+            if(int($leading) != $leading) {
+                $leading += 0.5;
+                $trailing -= 0.5;
+            }
+
+            " " x $leading.
+            $_.
+            " " x $trailing
+        } $colour_names[$i];
+        print "\n" if(($i + 1) % 4 == 0);
+        print "\n" if(($i + 1) % 8 == 0);
+    }
+    foreach my $start_index (16, 28, 40) {
+        my $i = $start_index;
+        foreach my $y (0 .. 5) {
+            foreach my $x (0 .. 11) {
+                if($start_index >= 28) {
+                    print "\e[38;5;0m";
+                }
+                printf "\e[48;5;${i}m %3s \e[0m ", $i;
+                $i += 1;
+            }
+            print "\n";
+            $i += 24;
+        }
+        print "\n";
+    }
+
+    foreach my $i (232 .. 255) {
+        print "\e[38;5;15m";
+        if($i > 245) {
+            print "\e[38;5;0m";
+        }
+        printf "\e[48;5;${i}m %3s \e[0m ", $i;
+        print "\n" if($i == 243);
+    }
+    print "\n\n";
+    exit 0;
+}
+
+sub show_completions {
+    print q{
+        _highlight_completions() {
+            local cur
+            local options
+            local colours
+
+            cur=${COMP_WORDS[COMP_CWORD]}
+            options="--colour $("${COMP_WORDS[0]}" --list-colours 2>/dev/null)"
+
+            if [[ "$cur" == --* ]]; then
+                COMPREPLY=($(compgen -W "$options" -- "$cur"))
+            else
+                COMPREPLY=()
+            fi
+        }
+        complete -F _highlight_completions highlight
+    };
+    exit(0);
+}
+
+sub usage {
+    qq{
+highlight [--named_colour re] [--colour index re] ... [re ...]
+
+Read from standard input and write to standard output, highlighting any text
+that matches the supplied Perl regular expressions.
+
+Arguments:
+  re                     Highlight matches in yellow
+  --named_colour re      Highlight matches in the named colour. See
+                         --list-colours for available names
+  --colour index re      Highlight matches in the specified numeric colour.
+                         See --show-colours. Named colours can also be used.
+
+The following will act and then immediately exit ignoring all other arguments:
+  --list-colours         List available colours
+  --show-colours         Show available colours
+  --shell-completions    Output Bash shell completions
+  -h, --help             Show this help
+
+In this example, 'warning' will be highlighted in yellow, 'fail' or 'error'
+in red, and 'ok' in green:
+
+  some_command | highlight --green 'ok' warning --red 'fail|error'
+
+}
+}
