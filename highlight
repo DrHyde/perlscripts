@@ -70,7 +70,8 @@ sub push_named_colour {
 
     if(@{$source} >= 2) {
         my $colour = $colour_index{shift(@{$source}) =~ s/^--//r};
-        my $re     = shift(@{$source});
+
+        my $re = handle_case_sensitivity($source);
         push @{$target}, [$colour, $re];
     } else {
         die("$arg: Expected 1 arg\n".usage());
@@ -82,9 +83,10 @@ sub push_any_colour {
 
     if(@{$source} >= 3) {
         shift @{$source};
-        my $colour = (shift(@{$source}) =~ s/^--//r);
+        my $colour = shift(@{$source});
         die("$arg: '$colour' is not valid\n".usage()) unless(exists($colour_index{$colour}));
-        my $re     = shift(@{$source});
+
+        my $re = handle_case_sensitivity($source);
         push @{$target}, [$colour_index{$colour}, $re];
     } else {
         die("$arg: Expected 2 args\n".usage());
@@ -94,8 +96,21 @@ sub push_any_colour {
 sub push_re {
     my($arg, $target, $source) = @_;
 
-    push @{$target}, [ 3, $source->[0] ]; # default to yellow
-    shift @{$source};
+    my $re = handle_case_sensitivity($source);
+    push @{$target}, [ 3, $re ]; # default to yellow
+}
+
+sub handle_case_sensitivity {
+    my $args = shift;
+    my $re = shift(@{$args});
+    if($re eq '-i') {
+        if(!@{$args}) {
+            die("-i: Expected 1 arg\n".usage());
+        }
+        $re = shift(@{$args});
+        $re = qr/$re/i;
+    }
+    return $re;
 }
 
 sub show_colours {
@@ -182,6 +197,9 @@ Arguments that can be repeated many times:
   --colour index re      Highlight matches in the specified numeric colour.
                          See --show-colours. Named colours can also be used.
 
+`re` is a perl regular expresion. You can make it match case-insensitively by
+saying `-i re`.
+
 Arguments where only the last instance encountered will have any effect:
   -f, --file file        The file to read and highlight. Defaults to STDIN.
                          Must be either a real file or a pipe.
@@ -194,9 +212,9 @@ ignoring all other arguments:
   -h, --help             Show this help
 
 In this example, 'warning' will be highlighted in yellow, 'fail' or 'error'
-in red, and 'ok' in green:
+in red, and 'ok' in green, case-insensitively:
 
-  some_command | highlight --green 'ok' warning --red 'fail|error'
+  some_command | highlight --green -i ok warning --red 'fail|error'
 
 We assume that you are using a terminal configured to display at least 256
 colours, with a black background, and light grey text. If you aren't then
