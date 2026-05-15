@@ -15,7 +15,7 @@ use Getopt::Long;
 Getopt::Long::Configure(qw(no_ignore_case));
 
 use Cwd qw(cwd);
-my @cwd = (cwd()); # yuck, global!
+my @cwd; # yuck, global!
 use File::Basename;
 use File::cd;
 use File::Slurper qw(read_text);
@@ -32,293 +32,327 @@ my $pal = Graphics::ColorNames->new();
 # cwd
 my $check_need_cwd_re = qr/^(\.|\.\.)|\//;
 
-# read defaults from ~/.config/lls/*
-foreach my $args_file ( map { "$ENV{HOME}/.config/lls/$_" }
-    "args",
-    "${^O}_args"
-) {
-    if(open(my $default_args_file, '<', $args_file)) {
-        my @opts = map {
-            my $line = $_ =~ s/^\s+|\s+$//gr;
-            my @words;
-            my $this_word = '';
-            my $in_quotes = '';
-            while(length($line)) {
-                my $this_char = substr($line, 0, 1, '');
-                if($this_char =~ /['"]/ && !$in_quotes) {
-                    $in_quotes = $this_char;
-                } elsif($this_char eq $in_quotes) {
-                    push @words, $this_word;
-                    $this_word = $in_quotes = '';
-                } elsif($in_quotes) {
-                    $this_word .= $this_char;
-                } elsif($this_char =~ /\s/) {
-                    push @words, $this_word;
-                    $this_word = '';
-                } else {
-                    $this_word .= $this_char;
+my @new_argv;
+my %opt_show;
+my($opt_long, $opt_all, $opt_hidden, $opt_bytes, $opt_dirs, $opt_reverse, $opt_time, $opt_size, $opt_recurse, @opt_no_recurse, $opt_git, $opt_ascii, $opt_utf8, @opt_ignore, $opt_iso8601, $opt_iso8601_seconds, $opt_noiso8601, $opt_noicons, $help, $HELP, @opt_ext_types, @opt_name_types, @opt_shebang_types, $opt_default_types, $opt_show_default_types, @opt_icon_types, $opt_default_icons, $opt_show_default_icons, @opt_colour_types, $opt_default_colours, $opt_show_default_colours, $opt_nocolour, $opt_force_colour, $show_all_args_exit, %opt_type, %opt_icon, %opt_colour, @targets, @output_lines, @last);
+my $split_colour_types_cache;
+my(%git_cache, %git_info_cache, %stat_cache);
+
+sub lls (@args) {
+    local @ARGV = @args;
+    @cwd = (cwd());
+    @new_argv = ();
+    %opt_show = ();
+    ($opt_long, $opt_all, $opt_hidden, $opt_bytes, $opt_dirs, $opt_reverse, $opt_time, $opt_size, $opt_recurse, $opt_git, $opt_ascii, $opt_utf8, $opt_iso8601, $opt_iso8601_seconds, $opt_noiso8601, $opt_noicons, $help, $HELP, $opt_default_types, $opt_show_default_types, $opt_default_icons, $opt_show_default_icons, $opt_default_colours, $opt_show_default_colours, $opt_nocolour, $opt_force_colour, $show_all_args_exit) = ();
+    @opt_no_recurse = ();
+    @opt_ignore = ();
+    @opt_ext_types = ();
+    @opt_name_types = ();
+    @opt_shebang_types = ();
+    @opt_icon_types = ();
+    @opt_colour_types = ();
+    %opt_type = ();
+    %opt_icon = ();
+    %opt_colour = ();
+    @targets = ();
+    @output_lines = ();
+    @last = ();
+    undef $split_colour_types_cache;
+    %git_cache = ();
+    %git_info_cache = ();
+    %stat_cache = ();
+
+    # read defaults from ~/.config/lls/*
+    my $config_dir = $ENV{LLS_TEST_CONFIG_DIR} || "$ENV{HOME}/.config/lls";
+    foreach my $args_file ( map { "$config_dir/$_" }
+        "args",
+        "${^O}_args"
+    ) {
+        if(open(my $default_args_file, '<', $args_file)) {
+            my @opts = map {
+                my $line = $_ =~ s/^\s+|\s+$//gr;
+                my @words;
+                my $this_word = '';
+                my $in_quotes = '';
+                while(length($line)) {
+                    my $this_char = substr($line, 0, 1, '');
+                    if($this_char =~ /['"]/ && !$in_quotes) {
+                        $in_quotes = $this_char;
+                    } elsif($this_char eq $in_quotes) {
+                        push @words, $this_word;
+                        $this_word = $in_quotes = '';
+                    } elsif($in_quotes) {
+                        $this_word .= $this_char;
+                    } elsif($this_char =~ /\s/) {
+                        push @words, $this_word;
+                        $this_word = '';
+                    } else {
+                        $this_word .= $this_char;
+                    }
                 }
-            }
-            grep { length } (@words, $this_word);
-        } grep { $_ !~ /^#/ } <$default_args_file>;
-        unshift(@ARGV, @opts);
-        close($default_args_file);
+                grep { length } (@words, $this_word);
+            } grep { $_ !~ /^#/ } <$default_args_file>;
+            unshift(@ARGV, @opts);
+            close($default_args_file);
+        }
     }
-}
-
-# implement bundling of single char args like -lAR. While Getopt::Long can
-# optionally do this it's incompatible with `--foo bar baz` style multi-arg
-# opts
-my @new_argv = ();
-while(@ARGV) {
-    my $this_arg = shift(@ARGV);
-    if($this_arg eq '--') {
-        push @new_argv, $this_arg, @ARGV;
-        last;
-    } elsif($this_arg =~ /^-[^-]/) {
-        my @unbundled = split('', $this_arg);
-        push @new_argv, map { "-$_" } @unbundled[1 .. $#unbundled];
-    } else {
-        push @new_argv, $this_arg;
+    
+    # implement bundling of single char args like -lAR. While Getopt::Long can
+    # optionally do this it's incompatible with `--foo bar baz` style multi-arg
+    # opts
+    while(@ARGV) {
+        my $this_arg = shift(@ARGV);
+        if($this_arg eq '--') {
+            push @new_argv, $this_arg, @ARGV;
+            last;
+        } elsif($this_arg =~ /^-[^-]/) {
+            my @unbundled = split('', $this_arg);
+            push @new_argv, map { "-$_" } @unbundled[1 .. $#unbundled];
+        } else {
+            push @new_argv, $this_arg;
+        }
     }
-}
-@ARGV = @new_argv;
-
-# finally after all that throat-clearing we can parse the command line.
-# first, die on errors
-$SIG{__WARN__} = sub {
-    die(@_, "\nTry -h for help\n") if($_[0] =~ /^Value .* invalid|(Incorrect|Unknown) option: /);
-    warn(@_);
-};
-# make sure these exist so we can reference them
-my %opt_show = map { $_ => 0 } qw(
-    perms links owner group size date icons name
-);
-(*rgb_to_bg, *rgb_to_fg) = (
-    \&Color::ANSI::Util::rgb_to_ansi24b_bg_code,
-    \&Color::ANSI::Util::rgb_to_ansi24b_fg_code
-);
-GetOptions(
-    'long|l'     => \my $opt_long,
-    'all|a'      => \my $opt_all,
-    'hidden|A'   => \my $opt_hidden,
-    'bytes|b'    => \my $opt_bytes,
-    'dirs|d'     => \my $opt_dirs,
-    'reverse|r'  => \my $opt_reverse,
-    'time|t'     => \my $opt_time,
-    'size|S'     => \my $opt_size,
-    'recurse|R'  => \my $opt_recurse,
-    'norecurse=s' => \my @opt_no_recurse,
-    'git|g'      => \my $opt_git,
-    'ascii|7'    => \my $opt_ascii,
-    'utf8|8'     => \my $opt_utf8,
-    'ignore|I=s' => \my @opt_ignore,
-    'iso8601'    => \my $opt_iso8601,
-    'iso8601s'   => \my $opt_iso8601_seconds,
-    'noiso8601'  => \my $opt_noiso8601,
-    'noicons'    => \my $opt_noicons,
-    'help|h|?'   => \my $help,
-    'HELP|H'     => \my $HELP,
-    # defaults
-    show_icons => \$opt_show{icons},
-    show_name  => \$opt_show{name},
-    # turned on with -l
-    show_perms => \$opt_show{perms},
-    show_links => \$opt_show{links},
-    show_owner => \$opt_show{owner},
-    show_group => \$opt_show{group},
-    show_size  => \$opt_show{size},
-    show_date  => \$opt_show{date},
-    # type maps
-    'ext_type=s{2}'  => \my @opt_ext_types,
-    'name_type=s{2}' => \my @opt_name_types,
-    'shebang_type=s{2}' => \my @opt_shebang_types,
-    'default_types'  => \my $opt_default_types,
-    'show_default_types' => \my $opt_show_default_types,
-    # icon types
-    'icon_type=s{2}' => \my @opt_icon_types,
-    'default_icons'  => \my $opt_default_icons,
-    'show_default_icons' => \my $opt_show_default_icons,
-    # colours
-    'colour_type=s{2}' => \my @opt_colour_types,
-    'default_colours'  => \my $opt_default_colours,
-    'show_default_colours' => \my $opt_show_default_colours,
-    'nocolour'             => \my $opt_nocolour,
-    'force_colour'          => \my $opt_force_colour,
-    'colour_depth=i' => sub ($meh, $input) {
+    @ARGV = @new_argv;
+    
+    # finally after all that throat-clearing we can parse the command line.
+    # first, die on errors
+    $SIG{__WARN__} = sub {
+        die(@_, "\nTry -h for help\n") if($_[0] =~ /^Value .* invalid|(Incorrect|Unknown) option: /);
+        warn(@_);
+    };
+    # make sure these exist so we can reference them
+    %opt_show = map { $_ => 0 } qw(
+        perms links owner group size date icons name
+    );
+    {
         no warnings 'redefine';
         (*rgb_to_bg, *rgb_to_fg) = (
-            $input == 4  ? ( \&Color::ANSI::Util::rgb_to_ansi16_bg_code,
-                             \&Color::ANSI::Util::rgb_to_ansi16_fg_code ) :
-            $input == 8  ? ( \&Color::ANSI::Util::rgb_to_ansi256_bg_code,
-                             \&Color::ANSI::Util::rgb_to_ansi256_fg_code ) :
-            $input == 24 ? ( \&Color::ANSI::Util::rgb_to_ansi24b_bg_code,
-                             \&Color::ANSI::Util::rgb_to_ansi24b_fg_code ) :
-                           die("Incorrect option: --colour_depth $input, should be 4, 8, or 24\n")
+            \&Color::ANSI::Util::rgb_to_ansi24b_bg_code,
+            \&Color::ANSI::Util::rgb_to_ansi24b_fg_code
         );
-    },
-    # debuggery, undocumented
-    'show_all_args'  => sub { say $_ foreach(@new_argv); exit 1; },
-);
-
-# now post-process args
-
-# first, with these we can just spit some output and stop
-if($help || $HELP) {
-    require Pod::Usage;
-    if($help) { pod2usage(0) }
-    if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
-}
-
-if($opt_show_default_types) {
-    my %defaults = default_file_types();
-    foreach my $name_part (sort keys %defaults) {
-        foreach my $type (sort keys %{$defaults{$name_part}}) {
-            foreach my $name (@{$defaults{$name_part}->{$type}}) {
-                say "--${name_part}_type $type $name";
+    }
+    GetOptions(
+        'long|l'     => \$opt_long,
+        'all|a'      => \$opt_all,
+        'hidden|A'   => \$opt_hidden,
+        'bytes|b'    => \$opt_bytes,
+        'dirs|d'     => \$opt_dirs,
+        'reverse|r'  => \$opt_reverse,
+        'time|t'     => \$opt_time,
+        'size|S'     => \$opt_size,
+        'recurse|R'  => \$opt_recurse,
+        'norecurse=s' => \@opt_no_recurse,
+        'git|g'      => \$opt_git,
+        'ascii|7'    => \$opt_ascii,
+        'utf8|8'     => \$opt_utf8,
+        'ignore|I=s' => \@opt_ignore,
+        'iso8601'    => \$opt_iso8601,
+        'iso8601s'   => \$opt_iso8601_seconds,
+        'noiso8601'  => \$opt_noiso8601,
+        'noicons'    => \$opt_noicons,
+        'help|h|?'   => \$help,
+        'HELP|H'     => \$HELP,
+        # defaults
+        show_icons => \$opt_show{icons},
+        show_name  => \$opt_show{name},
+        # turned on with -l
+        show_perms => \$opt_show{perms},
+        show_links => \$opt_show{links},
+        show_owner => \$opt_show{owner},
+        show_group => \$opt_show{group},
+        show_size  => \$opt_show{size},
+        show_date  => \$opt_show{date},
+        # type maps
+        'ext_type=s{2}'  => \@opt_ext_types,
+        'name_type=s{2}' => \@opt_name_types,
+        'shebang_type=s{2}' => \@opt_shebang_types,
+        'default_types'  => \$opt_default_types,
+        'show_default_types' => \$opt_show_default_types,
+        # icon types
+        'icon_type=s{2}' => \@opt_icon_types,
+        'default_icons'  => \$opt_default_icons,
+        'show_default_icons' => \$opt_show_default_icons,
+        # colours
+        'colour_type=s{2}' => \@opt_colour_types,
+        'default_colours'  => \$opt_default_colours,
+        'show_default_colours' => \$opt_show_default_colours,
+        'nocolour'             => \$opt_nocolour,
+        'force_colour'          => \$opt_force_colour,
+        'colour_depth=i' => sub ($meh, $input) {
+            no warnings 'redefine';
+            (*rgb_to_bg, *rgb_to_fg) = (
+                $input == 4  ? ( \&Color::ANSI::Util::rgb_to_ansi16_bg_code,
+                                 \&Color::ANSI::Util::rgb_to_ansi16_fg_code ) :
+                $input == 8  ? ( \&Color::ANSI::Util::rgb_to_ansi256_bg_code,
+                                 \&Color::ANSI::Util::rgb_to_ansi256_fg_code ) :
+                $input == 24 ? ( \&Color::ANSI::Util::rgb_to_ansi24b_bg_code,
+                                 \&Color::ANSI::Util::rgb_to_ansi24b_fg_code ) :
+                               die("Incorrect option: --colour_depth $input, should be 4, 8, or 24\n")
+            );
+        },
+        # debuggery, undocumented
+        'show_all_args'  => sub { say $_ foreach(@new_argv); $show_all_args_exit = 1; },
+    );
+    return $show_all_args_exit if($show_all_args_exit);
+    
+    # now post-process args
+    
+    # first, with these we can just spit some output and stop
+    if($help || $HELP) {
+        require Pod::Usage;
+        if($help) { pod2usage(0) }
+        if($HELP) { pod2usage({-exitval => 0, -verbose => 2}) }
+    }
+    
+    if($opt_show_default_types) {
+        my %defaults = default_file_types();
+        foreach my $name_part (sort keys %defaults) {
+            foreach my $type (sort keys %{$defaults{$name_part}}) {
+                foreach my $name (@{$defaults{$name_part}->{$type}}) {
+                    say "--${name_part}_type $type $name";
+                }
             }
         }
     }
-}
-if($opt_show_default_icons) {
-    my %defaults = default_icon_types();
-    foreach my $type (sort keys %defaults) {
-        say "--icon_type $type $defaults{$type}";
+    if($opt_show_default_icons) {
+        my %defaults = default_icon_types();
+        foreach my $type (sort keys %defaults) {
+            say "--icon_type $type $defaults{$type}";
+        }
     }
-}
-if($opt_show_default_colours) {
-    my %defaults = default_colour_types();
-    foreach my $type (sort keys %defaults) {
-        say "--colour_type $type '$defaults{$type}'";
+    if($opt_show_default_colours) {
+        my %defaults = default_colour_types();
+        foreach my $type (sort keys %defaults) {
+            say "--colour_type $type '$defaults{$type}'";
+        }
     }
-}
-exit(0) if($opt_show_default_types || $opt_show_default_icons || $opt_show_default_colours);
-
-# some things imply other things
-$opt_ascii   = 0 if($opt_utf8);
-$opt_noicons = 1 if($opt_ascii);
-$opt_iso8601 = 1 if($opt_iso8601_seconds);
-$opt_iso8601 = 0 if($opt_noiso8601);
-
-# some options are incompatible with each other
-if($opt_noicons && $opt_show{icons}) {
-    die "\n--noicons and --show_icons makes no sense\n\n";
-}
-
-# defaults for which columns to display
-if(!grep { $_ } values(%opt_show)) {
-    # the user didn't set any of these so we can
-    if($opt_long) {
-        $opt_show{$_}++ foreach (keys(%opt_show));
+    return 0 if($opt_show_default_types || $opt_show_default_icons || $opt_show_default_colours);
+    
+    # some things imply other things
+    $opt_ascii   = 0 if($opt_utf8);
+    $opt_noicons = 1 if($opt_ascii);
+    $opt_iso8601 = 1 if($opt_iso8601_seconds);
+    $opt_iso8601 = 0 if($opt_noiso8601);
+    
+    # some options are incompatible with each other
+    if($opt_noicons && $opt_show{icons}) {
+        die "\n--noicons and --show_icons makes no sense\n\n";
+    }
+    
+    # defaults for which columns to display
+    if(!grep { $_ } values(%opt_show)) {
+        # the user didn't set any of these so we can
+        if($opt_long) {
+            $opt_show{$_}++ foreach (keys(%opt_show));
+        } else {
+            @opt_show{qw(icons name)} = (1, 1);
+        }
+    }
+    # these columns are controlled by other args
+    $opt_show{git}   = $opt_git;
+    $opt_show{tree}  = $opt_recurse;
+    $opt_show{icons} = 0 if($opt_noicons);
+    
+    # transmogrify the lists of {name,ext}/type pairs into a more
+    # useful data structure
+    if(!@opt_ext_types && !@opt_name_types) {
+        %opt_type = default_file_types();
     } else {
-        @opt_show{qw(icons name)} = (1, 1);
+        if($opt_default_types) { %opt_type = default_file_types(); }
+        while(@opt_name_types) {
+            my($name, $type) = splice(@opt_name_types, 0, 2);
+            $opt_type{name}->{$type} ||= [];
+            push @{$opt_type{name}->{$type}}, $name;
+        }
+        while(@opt_ext_types) {
+            my($ext, $type) = splice(@opt_ext_types, 0, 2);
+            $opt_type{ext}->{$type} ||= [];
+            push @{$opt_type{ext}->{$type}}, $ext;
+        }
+        while(@opt_shebang_types) {
+            my($shebang, $type) = splice(@opt_shebang_types, 0, 2);
+            $opt_type{shebang}->{$type} ||= [];
+            push @{$opt_type{shebang}->{$type}}, $shebang;
+        }
     }
-}
-# these columns are controlled by other args
-$opt_show{git}   = $opt_git;
-$opt_show{tree}  = $opt_recurse;
-$opt_show{icons} = 0 if($opt_noicons);
-
-# transmogrify the lists of {name,ext}/type pairs into a more
-# useful data structure
-my %opt_type;
-if(!@opt_ext_types && !@opt_name_types) {
-    %opt_type = default_file_types();
-} else {
-    if($opt_default_types) { %opt_type = default_file_types(); }
-    while(@opt_name_types) {
-        my($name, $type) = splice(@opt_name_types, 0, 2);
-        $opt_type{name}->{$type} ||= [];
-        push @{$opt_type{name}->{$type}}, $name;
-    }
-    while(@opt_ext_types) {
-        my($ext, $type) = splice(@opt_ext_types, 0, 2);
-        $opt_type{ext}->{$type} ||= [];
-        push @{$opt_type{ext}->{$type}}, $ext;
-    }
-    while(@opt_shebang_types) {
-        my($shebang, $type) = splice(@opt_shebang_types, 0, 2);
-        $opt_type{shebang}->{$type} ||= [];
-        push @{$opt_type{shebang}->{$type}}, $shebang;
-    }
-}
-# likewise for type/icon pairs
-my %opt_icon;
-if(!@opt_icon_types) {
-    %opt_icon = default_icon_types();
-} else {
-    %opt_icon = (
-        ($opt_default_icons ? default_icon_types() : ()),
-        @opt_icon_types
-    );
-}
-# and for type/colour pairs
-my %opt_colour;
-if(!@opt_colour_types) {
-    %opt_colour = default_colour_types();
-} else {
-    %opt_colour = (
-        ($opt_default_colours ? default_colour_types() : ()),
-        @opt_colour_types
-    );
-}
-
-# clean up trailing / and multiple // in --ignore and --norecurse,
-# and parse $FIGNORE
-@opt_ignore = map { s/\/+$//; s/\/+/\//rg } map {
-    $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : $_
-} @opt_ignore;
-@opt_no_recurse = map { s/\/+$//; s/\/+/\//rg } @opt_no_recurse;
-
-# finally, we're ready to go
-my @targets = map { s{/+$}{}r } @ARGV; # sortfiles(@ARGV);
-@targets = ('.') unless(@targets);
-my @output_lines;
-my @last;
-work_on(0, grep {
-    (-l $_ || -e $_) ? 1 : do {
-        print STDERR "$0: $_: No such file or directory\n";
-        0;
-    }
-} @targets);
-
-# some columns have variable width, we need to figure out how much is needed.
-# assuming we display all columns, the variable width ones are in positions 1 - 4
-my @line_max_sizes = (0, 0, 0, 0, 0);
-my %index_of_field = (
-    # for each var-width column which is turned on, how many of those to its left are turned on?
-    links => $opt_show{links} ? _how_many_set(\%opt_show, qw(perms)) : undef,
-    owner => $opt_show{owner} ? _how_many_set(\%opt_show, qw(perms links)) : undef,
-    group => $opt_show{group} ? _how_many_set(\%opt_show, qw(perms links owner)) : undef,
-    size  => $opt_show{size}  ? _how_many_set(\%opt_show, qw(perms links owner group)) : undef,
-);
-
-foreach my $line (grep { ref($_) } @output_lines) {
-    foreach my $index (grep { defined } @index_of_field{qw(links owner group size)}) {
-        $line_max_sizes[$index] = length($line->[$index]) if(
-            # !defined($line_max_sizes[$index]) ||
-            (defined($line->[$index]) && length($line->[$index]) > $line_max_sizes[$index])
-        )
-    }
-}
-my $format = $opt_show{perms} ? '%s' : '';
-$format   .= $opt_show{links} ? ' %'.($line_max_sizes[$index_of_field{links}] + 1).'d' : '';
-$format   .= $opt_show{owner} ? ' %'.($line_max_sizes[$index_of_field{owner}] + 1).'s' : '';
-$format   .= $opt_show{group} ? ' %'.($line_max_sizes[$index_of_field{group}] + 1).'s' : '';
-$format   .= $opt_show{size}  ? ' %'.($line_max_sizes[$index_of_field{size}]  + 1).'s' : '';
-$format   .= $opt_show{date}  ? ' %s'  : '';
-$format   .= $opt_show{icons} ? ' %s'  : '';
-$format   .= $opt_show{git}   ? ' %s'  : '';
-$format   .= $opt_show{tree}  ? '%s'   : ''; # no space cos tree art always has one
-$format   .= $opt_show{name}  ? ' %s'  : '';
-$format =~ s/^ //;
-
-foreach my $line (@output_lines) {
-    if(!ref($line)) {
-        say $line;
+    # likewise for type/icon pairs
+    if(!@opt_icon_types) {
+        %opt_icon = default_icon_types();
     } else {
-        say sprintf($format, @{$line});
+        %opt_icon = (
+            ($opt_default_icons ? default_icon_types() : ()),
+            @opt_icon_types
+        );
     }
+    # and for type/colour pairs
+    if(!@opt_colour_types) {
+        %opt_colour = default_colour_types();
+    } else {
+        %opt_colour = (
+            ($opt_default_colours ? default_colour_types() : ()),
+            @opt_colour_types
+        );
+    }
+    
+    # clean up trailing / and multiple // in --ignore and --norecurse,
+    # and parse $FIGNORE
+    @opt_ignore = map { s/\/+$//; s/\/+/\//rg } map {
+        $_ eq '$FIGNORE' ? (grep { length } split(':', $ENV{FIGNORE})) : $_
+    } @opt_ignore;
+    @opt_no_recurse = map { s/\/+$//; s/\/+/\//rg } @opt_no_recurse;
+    
+    # finally, we're ready to go
+    @targets = map { s{/+$}{}r } @ARGV; # sortfiles(@ARGV);
+    @targets = ('.') unless(@targets);
+    @output_lines = ();
+    @last = ();
+    work_on(0, grep {
+        (-l $_ || -e $_) ? 1 : do {
+            print STDERR "$0: $_: No such file or directory\n";
+            0;
+        }
+    } @targets);
+    
+    # some columns have variable width, we need to figure out how much is needed.
+    # assuming we display all columns, the variable width ones are in positions 1 - 4
+    my @line_max_sizes = (0, 0, 0, 0, 0);
+    my %index_of_field = (
+        # for each var-width column which is turned on, how many of those to its left are turned on?
+        links => $opt_show{links} ? _how_many_set(\%opt_show, qw(perms)) : undef,
+        owner => $opt_show{owner} ? _how_many_set(\%opt_show, qw(perms links)) : undef,
+        group => $opt_show{group} ? _how_many_set(\%opt_show, qw(perms links owner)) : undef,
+        size  => $opt_show{size}  ? _how_many_set(\%opt_show, qw(perms links owner group)) : undef,
+    );
+    
+    foreach my $line (grep { ref($_) } @output_lines) {
+        foreach my $index (grep { defined } @index_of_field{qw(links owner group size)}) {
+            $line_max_sizes[$index] = length($line->[$index]) if(
+                # !defined($line_max_sizes[$index]) ||
+                (defined($line->[$index]) && length($line->[$index]) > $line_max_sizes[$index])
+            )
+        }
+    }
+    my $format = $opt_show{perms} ? '%s' : '';
+    $format   .= $opt_show{links} ? ' %'.($line_max_sizes[$index_of_field{links}] + 1).'d' : '';
+    $format   .= $opt_show{owner} ? ' %'.($line_max_sizes[$index_of_field{owner}] + 1).'s' : '';
+    $format   .= $opt_show{group} ? ' %'.($line_max_sizes[$index_of_field{group}] + 1).'s' : '';
+    $format   .= $opt_show{size}  ? ' %'.($line_max_sizes[$index_of_field{size}]  + 1).'s' : '';
+    $format   .= $opt_show{date}  ? ' %s'  : '';
+    $format   .= $opt_show{icons} ? ' %s'  : '';
+    $format   .= $opt_show{git}   ? ' %s'  : '';
+    $format   .= $opt_show{tree}  ? '%s'   : ''; # no space cos tree art always has one
+    $format   .= $opt_show{name}  ? ' %s'  : '';
+    $format =~ s/^ //;
+    
+    foreach my $line (@output_lines) {
+        if(!ref($line)) {
+            say $line;
+        } else {
+            say sprintf($format, @{$line});
+        }
+    }
+    
+    return 0;
 }
 
 sub work_on ($depth, @targets) {
@@ -426,7 +460,7 @@ sub _how_many_set($hash, @keys) {
 }
 
 sub colourize ($filename, $text) {
-    state $split_colour_types = { map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour };
+    my $split_colour_types = $split_colour_types_cache ||= { map { $_ => [split(/\s+on\s+/, lc($opt_colour{$_}))] } keys %opt_colour };
     my $rendered_text = ($opt_force_colour || (-t STDOUT && !$opt_nocolour))
         ? join('', do {
               # link/exec are special, we don't want to over-ride them with
@@ -455,7 +489,6 @@ sub colourize ($filename, $text) {
     return $rendered_text;
 }
 
-my %git_cache;
 sub format_git ($dirent) {
     return '  ' if($dirent eq '.git');
     my $what_to_check = $dirent =~ /^\// ? $dirent : $cwd[-1];
@@ -481,7 +514,6 @@ sub format_git ($dirent) {
     return '  ';
 }
 
-my %git_info_cache;
 sub _parse_git_info_for_dir ($what_to_check) {
     return %{$git_info_cache{$what_to_check}} if(exists($git_info_cache{$what_to_check}));
 
@@ -590,7 +622,6 @@ sub sorter {
              sub { 0 }
 }
 
-my %stat_cache;
 sub cached_stat ($filename) {
     $filename = index($filename, '/') == 0 ? $filename : "$cwd[-1]/$filename";
 
@@ -781,6 +812,10 @@ sub default_colour_types {
         git        => 'blue',
     )
 }
+
+exit(lls(@ARGV)) unless(caller);
+
+1;
 
 =encoding utf8
 
