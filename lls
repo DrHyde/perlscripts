@@ -19,6 +19,7 @@ my @cwd = (cwd()); # yuck, global!
 use File::Basename;
 use File::cd;
 use File::Slurper qw(read_text);
+use Pod::Usage;
 use POSIX qw(strftime);
 
 use Color::ANSI::Util ();
