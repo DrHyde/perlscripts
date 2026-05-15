@@ -25,74 +25,87 @@ my $ua;
 my %programme_cache;
 my %page_sort_key_cache;
 
-my %opts = (
-    debug       => 0,
-    clear_cache => 0,
-);
+sub main {
+    my (@argv) = @_;
 
-while (defined(my $next = shift @ARGV)) {
-    if ($next =~ /^--(?:help|h)$/) {
-        $opts{help} = 1;
-        next;
+    $debug = 0;
+    $cache_dir = CACHE_DIR;
+    $requested_pid = undef;
+    $ua = undef;
+    %programme_cache = ();
+    %page_sort_key_cache = ();
+
+    my %opts = (
+        debug       => 0,
+        clear_cache => 0,
+    );
+
+    while (defined(my $next = shift @argv)) {
+        if ($next =~ /^--(?:help|h)$/) {
+            $opts{help} = 1;
+            next;
+        }
+        if ($next eq '--debug') {
+            $opts{debug} = 1;
+            next;
+        }
+        if ($next eq '--clear-cache') {
+            $opts{clear_cache} = 1;
+            next;
+        }
+        if ($next eq '--cache-dir') {
+            my $value = shift @argv;
+            die "--cache-dir requires a directory path\n" unless defined $value && length $value;
+            $opts{cache_dir} = $value;
+            next;
+        }
+        die "Unexpected argument: $next\n" if defined $opts{arg};
+        $opts{arg} = $next;
     }
-    if ($next eq '--debug') {
-        $opts{debug} = 1;
-        next;
+
+    if ($opts{help}) {
+        print STDOUT usage();
+        return 0;
     }
-    if ($next eq '--clear-cache') {
-        $opts{clear_cache} = 1;
-        next;
+
+    if ($opts{clear_cache}) {
+        $cache_dir = $opts{cache_dir} if defined $opts{cache_dir};
+        clear_cache();
+        print STDOUT "Cache cleared.\n";
+        return 0;
     }
-    if ($next eq '--cache-dir') {
-        my $value = shift @ARGV;
-        die "--cache-dir requires a directory path\n" unless defined $value && length $value;
-        $opts{cache_dir} = $value;
-        next;
+
+    if (!defined $opts{arg}) {
+        print STDOUT usage();
+        return 1;
     }
-    die "Unexpected argument: $next\n" if defined $opts{arg};
-    $opts{arg} = $next;
+
+    $requested_pid = clean_pid($opts{arg});
+    die "Invalid PID: $opts{arg}\n" unless $requested_pid =~ /\A@{[ REGEX_PID ]}\z/;
+
+    $debug = $opts{debug};
+    $cache_dir = $opts{cache_dir} if defined $opts{cache_dir};
+
+    $ua = HTTP::Tiny->new(
+        agent           => 'iplayer-tree/1.0',
+        verify_SSL      => 1,
+        default_headers => {
+            'Accept'          => 'application/json,text/html;q=0.9,*/*;q=0.8',
+            'Accept-Language' => 'en-GB,en;q=0.8',
+        },
+    );
+
+    STDOUT->autoflush(1);
+
+    init_cache();
+
+    my $tree = build_tree($requested_pid);
+
+    my @lines;
+    render_tree($tree, '', 1, 1, \@lines);
+    print STDOUT join("\n", @lines)."\n";
+    return 0;
 }
-
-if ($opts{help}) {
-    print usage();
-    exit 0;
-}
-
-if ($opts{clear_cache}) {
-    clear_cache();
-    print "Cache cleared.\n";
-    exit 0;
-}
-
-if (!defined $opts{arg}) {
-    print usage();
-    exit 1;
-}
-
-$requested_pid = clean_pid($opts{arg});
-die "Invalid PID: $opts{arg}\n" unless $requested_pid =~ /\A@{[ REGEX_PID ]}\z/;
-
-$debug = $opts{debug};
-$cache_dir = $opts{cache_dir} if defined $opts{cache_dir};
-
-$ua = HTTP::Tiny->new(
-    agent           => 'iplayer-tree/1.0',
-    verify_SSL      => 1,
-    default_headers => {
-        'Accept'          => 'application/json,text/html;q=0.9,*/*;q=0.8',
-        'Accept-Language' => 'en-GB,en;q=0.8',
-    },
-);
-
-STDOUT->autoflush(1);
-
-init_cache();
-
-my $tree = build_tree($requested_pid);
-
-my @lines;
-render_tree($tree, '', 1, 1, \@lines);
-print join("\n", @lines)."\n";
 
 sub usage {
     return <<'EOF';
@@ -137,13 +150,13 @@ sub fetch_url {
     if (-f $cache_file) {
         my $mtime = (stat($cache_file))[9];
         if (defined $mtime && time - $mtime <= CACHE_TTL) {
-            print "[cache] $url\n" if $debug;
+            print STDOUT "[cache] $url\n" if $debug;
             return read_cache_file($cache_file);
         }
         unlink $cache_file or die "Failed to delete stale cache file $cache_file: $!\n";
     }
 
-    print "[fetch] $url\n" if $debug;
+    print STDOUT "[fetch] $url\n" if $debug;
     my $response = $ua->get($url);
     if (!$response->{success}) {
         my $reason = $response->{reason} || 'unknown error';
@@ -792,3 +805,6 @@ sub trim {
     $value =~ s/^\s+|\s+$//g;
     return $value;
 }
+
+caller or exit main(@ARGV);
+1;

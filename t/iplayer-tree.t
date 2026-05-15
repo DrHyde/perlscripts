@@ -7,39 +7,55 @@ use File::Path qw(make_path);
 use File::Spec;
 use File::Temp qw(tempdir);
 use FindBin ();
-use IPC::Open3 qw(open3);
-use Symbol qw(gensym);
 use Test2::V0;
 
 my $temp_root = tempdir('iplayer-tree-tests-XXXXXXXX', TMPDIR => 1, CLEANUP => 1);
 my $fresh_cache_copy_seq = 0;
+my $script_loaded = 0;
 
 sub run_script {
     my (@args) = @_;
 
-    my $stderr = gensym;
-    my $pid = open3(my $in, my $out, $stderr, $^X, "$FindBin::Bin/../iplayer-tree", @args);
-    close $in or die "close stdin: $!";
-    binmode $out;
-    binmode $stderr;
+    if (!$script_loaded) {
+        require "$FindBin::Bin/../iplayer-tree";
+        $script_loaded = 1;
+    }
 
-    local $/;
-    my $stdout = <$out>;
-    my $errout = <$stderr>;
+    my $stdout = '';
+    my $stderr = '';
+    open my $out_fh, '>:encoding(UTF-8)', \$stdout or die "open stdout scalar: $!";
+    open my $err_fh, '>:encoding(UTF-8)', \$stderr or die "open stderr scalar: $!";
 
-    waitpid $pid, 0;
-    my $exit = $? >> 8;
+    my $exit = 0;
+    {
+        local *STDOUT = $out_fh;
+        local *STDERR = $err_fh;
+
+        my $ok = eval {
+            $exit = main(@args);
+            1;
+        };
+        if (!$ok) {
+            $stderr .= $@ if defined $@;
+            $exit = 255;
+        }
+    }
+
+    close $out_fh or die "close stdout scalar: $!";
+    close $err_fh or die "close stderr scalar: $!";
+    utf8::decode($stdout) if !utf8::is_utf8($stdout);
+    utf8::decode($stderr) if !utf8::is_utf8($stderr);
 
     return {
         exit   => $exit,
-        stdout => defined $stdout ? $stdout : '',
-        stderr => defined $errout ? $errout : '',
+        stdout => $stdout,
+        stderr => $stderr,
     };
 }
 
 sub read_file {
     my ($path) = @_;
-    open my $fh, '<:raw', $path or die "open $path: $!";
+    open my $fh, '<:encoding(UTF-8)', $path or die "open $path: $!";
     local $/;
     my $content = <$fh>;
     close $fh or die "close $path: $!";
