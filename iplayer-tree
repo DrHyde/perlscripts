@@ -1,0 +1,794 @@
+#!/usr/bin/env perl
+
+use strict;
+use utf8;
+use warnings;
+
+use Digest::MD5 qw(md5_hex);
+use File::Path qw(make_path remove_tree);
+use JSON::PP qw(decode_json);
+use HTTP::Tiny;
+use IO::Handle;
+use Time::Local qw(timegm);
+use URI;
+use XML::LibXML;
+use open qw(:std :encoding(UTF-8));
+
+use constant REGEX_PID => qr/[b-df-hj-np-tv-z0-9]{8,}/;
+use constant CACHE_DIR => '/tmp/iplayer-tree-cache';
+use constant CACHE_TTL => 3600;
+
+my $debug = 0;
+my $cache_dir = CACHE_DIR;
+my $requested_pid;
+my $ua;
+my %programme_cache;
+my %page_sort_key_cache;
+
+my %opts = (
+    debug       => 0,
+    clear_cache => 0,
+);
+
+while (defined(my $next = shift @ARGV)) {
+    if ($next =~ /^--(?:help|h)$/) {
+        $opts{help} = 1;
+        next;
+    }
+    if ($next eq '--debug') {
+        $opts{debug} = 1;
+        next;
+    }
+    if ($next eq '--clear-cache') {
+        $opts{clear_cache} = 1;
+        next;
+    }
+    if ($next eq '--cache-dir') {
+        my $value = shift @ARGV;
+        die "--cache-dir requires a directory path\n" unless defined $value && length $value;
+        $opts{cache_dir} = $value;
+        next;
+    }
+    die "Unexpected argument: $next\n" if defined $opts{arg};
+    $opts{arg} = $next;
+}
+
+if ($opts{help}) {
+    print usage();
+    exit 0;
+}
+
+if ($opts{clear_cache}) {
+    clear_cache();
+    print "Cache cleared.\n";
+    exit 0;
+}
+
+if (!defined $opts{arg}) {
+    print usage();
+    exit 1;
+}
+
+$requested_pid = clean_pid($opts{arg});
+die "Invalid PID: $opts{arg}\n" unless $requested_pid =~ /\A@{[ REGEX_PID ]}\z/;
+
+$debug = $opts{debug};
+$cache_dir = $opts{cache_dir} if defined $opts{cache_dir};
+
+$ua = HTTP::Tiny->new(
+    agent           => 'iplayer-tree/1.0',
+    verify_SSL      => 1,
+    default_headers => {
+        'Accept'          => 'application/json,text/html;q=0.9,*/*;q=0.8',
+        'Accept-Language' => 'en-GB,en;q=0.8',
+    },
+);
+
+STDOUT->autoflush(1);
+
+init_cache();
+
+my $tree = build_tree($requested_pid);
+
+my @lines;
+render_tree($tree, '', 1, 1, \@lines);
+print join("\n", @lines)."\n";
+
+sub usage {
+    return <<'EOF';
+Usage: iplayer-tree [--debug] [--clear-cache] <pid-or-bbc-url>
+
+Display a BBC iPlayer programme tree, showing:
+  * the enclosing brand/series path
+  * siblings of the requested PID
+  * immediate children of the requested PID
+
+Colours:
+  * requested PID: green
+  * available episode PIDs: pink
+  * unavailable episode PIDs: dull red
+  * other PIDs: dark grey
+
+Programme titles are OSC 8 hyperlinks.
+URL fetches are cached in /tmp/iplayer-tree-cache for one hour.
+
+Options:
+  --debug         print fetched URLs as they are requested
+  --clear-cache   delete all cached URL contents and exit
+EOF
+}
+
+sub clean_pid {
+    my ($value) = @_;
+    $value =~ s/^\s+|\s+$//g;
+
+    if ($value =~ m{\Ahttps?://}) {
+        my $uri = URI->new($value);
+        my @pids = grep { $_ =~ /\A@{[ REGEX_PID ]}\z/ } $uri->path_segments;
+        $value = $pids[-1] if @pids;
+    }
+
+    return $value;
+}
+
+sub fetch_url {
+    my ($url) = @_;
+    my $cache_file = cache_file_for_url($url);
+    if (-f $cache_file) {
+        my $mtime = (stat($cache_file))[9];
+        if (defined $mtime && time - $mtime <= CACHE_TTL) {
+            print "[cache] $url\n" if $debug;
+            return read_cache_file($cache_file);
+        }
+        unlink $cache_file or die "Failed to delete stale cache file $cache_file: $!\n";
+    }
+
+    print "[fetch] $url\n" if $debug;
+    my $response = $ua->get($url);
+    if (!$response->{success}) {
+        my $reason = $response->{reason} || 'unknown error';
+        die "Failed to fetch $url: $reason\n";
+    }
+
+    write_cache_file($cache_file, $response->{content});
+    return $response->{content};
+}
+
+sub init_cache {
+    make_path($cache_dir) unless -d $cache_dir;
+
+    opendir my $dh, $cache_dir or die "Failed to open cache directory $cache_dir: $!\n";
+    while (my $entry = readdir $dh) {
+        next if $entry =~ /^\.\.?$/;
+        my $path = $cache_dir.'/'.$entry;
+        next unless -f $path;
+
+        my $mtime = (stat($path))[9];
+        next if defined $mtime && time - $mtime <= CACHE_TTL;
+        unlink $path or die "Failed to delete stale cache file $path: $!\n";
+    }
+    closedir $dh or die "Failed to close cache directory $cache_dir: $!\n";
+}
+
+sub clear_cache {
+    return unless -d $cache_dir;
+    remove_tree($cache_dir, { keep_root => 1, error => \my $errors });
+    if (@{$errors}) {
+        my @messages = map {
+            my ($path, $message) = %$_;
+            "$path: $message";
+        } @{$errors};
+        die "Failed to clear cache:\n".join("\n", @messages)."\n";
+    }
+}
+
+sub cache_file_for_url {
+    my ($url) = @_;
+    return $cache_dir.'/'.md5_hex($url);
+}
+
+sub read_cache_file {
+    my ($path) = @_;
+    open my $fh, '<:raw', $path or die "Failed to read cache file $path: $!\n";
+    local $/;
+    my $content = <$fh>;
+    close $fh or die "Failed to close cache file $path: $!\n";
+    return $content;
+}
+
+sub write_cache_file {
+    my ($path, $content) = @_;
+    open my $fh, '>:raw', $path or die "Failed to write cache file $path: $!\n";
+    print {$fh} $content or die "Failed to write cache content to $path: $!\n";
+    close $fh or die "Failed to close cache file $path: $!\n";
+}
+
+sub fetch_programme {
+    my ($pid) = @_;
+    return $programme_cache{$pid} if exists $programme_cache{$pid};
+
+    my $json = fetch_url("https://www.bbc.co.uk/programmes/$pid.json");
+    my $decoded = eval { decode_json($json) };
+    die "Failed to decode programme metadata for $pid: $@\n" if $@;
+    die "No programme metadata for $pid\n" unless $decoded->{programme};
+
+    return $programme_cache{$pid} = $decoded->{programme};
+}
+
+sub build_tree {
+    my ($requested_pid) = @_;
+
+    my $requested_doc = eval { fetch_programme($requested_pid) };
+    if ($@) {
+        my $programme_error = $@;
+        my $group_tree = eval { fetch_group_tree($requested_pid) };
+        return $group_tree if !$@;
+        die $programme_error;
+    }
+
+    my @path = ancestry_docs($requested_doc);
+    push @path, $requested_doc;
+
+    my $tree = node_from_doc($path[0]);
+    my $cursor = $tree;
+
+    for my $index (0 .. $#path - 1) {
+        my $parent_doc = $path[$index];
+        my $child_doc  = $path[$index + 1];
+        my $children   = children_for_path($parent_doc, $child_doc);
+
+        if (!grep { $_->{pid} eq $child_doc->{pid} } @{$children}) {
+            push @{$children}, node_from_doc($child_doc);
+        }
+
+        $cursor->{children} = $children;
+        ($cursor) = grep { $_->{pid} eq $child_doc->{pid} } @{$children};
+    }
+
+    $cursor->{children} = children_for_requested($requested_doc);
+
+    return $tree;
+}
+
+sub fetch_group_tree {
+    my ($group_pid) = @_;
+
+    my $page1 = fetch_group_page($group_pid, 1);
+    my $group_name = $page1->{state}{page}{groupName}
+        || $page1->{state}{entities}{elements}{title}
+        || $group_pid;
+
+    my $root = node_from_values(
+        pid   => $group_pid,
+        type  => 'group',
+        title => $group_name,
+        url   => "https://www.bbc.co.uk/iplayer/group/$group_pid",
+    );
+
+    my @children = map { group_node($_) } @{group_elements($page1->{state})};
+    my $total_pages = $page1->{state}{pagination}{totalPages} || 1;
+    my %seen = map { $_->{pid} => 1 } @children;
+
+    for my $page (2 .. $total_pages) {
+        my $page_state = fetch_group_page($group_pid, $page)->{state};
+        for my $element (@{group_elements($page_state)}) {
+            my $node = group_node($element);
+            next if $seen{$node->{pid}}++;
+            push @children, $node;
+        }
+    }
+
+    $root->{children} = \@children;
+    return $root;
+}
+
+sub fetch_group_page {
+    my ($group_pid, $page) = @_;
+
+    my $url = "https://www.bbc.co.uk/iplayer/group/$group_pid";
+    $url .= "?page=$page" if $page && $page > 1;
+
+    my $html = fetch_url($url);
+    my ($json) = $html =~ /window\.__IPLAYER_REDUX_STATE__\s*=\s*(.+?);<\/script>/s;
+    die "Could not extract iPlayer group state for $group_pid\n" unless $json;
+
+    my $state = eval { decode_json($json) };
+    die "Failed to decode iPlayer group state for $group_pid: $@\n" if $@;
+    die "No group metadata for $group_pid\n" unless ($state->{page}{id} || '') eq $group_pid;
+
+    return {
+        state => $state,
+    };
+}
+
+sub group_elements {
+    my ($state) = @_;
+    return $state->{entities}{elements} || [];
+}
+
+sub group_node {
+    my ($element) = @_;
+
+    my $pid = $element->{tleo_id} || $element->{id};
+    my $url = $element->{tleo_id}
+        ? "https://www.bbc.co.uk/iplayer/episodes/$element->{tleo_id}"
+        : "https://www.bbc.co.uk/iplayer/episode/$element->{id}";
+
+    return node_from_values(
+        pid       => $pid,
+        type      => 'group-item',
+        title     => $element->{title} || $pid,
+        url       => $url,
+        available => 1,
+    );
+}
+
+sub ancestry_docs {
+    my ($doc) = @_;
+    my @ancestors;
+    my $cursor = $doc;
+
+    while (my $parent = $cursor->{parent}{programme}) {
+        unshift @ancestors, $parent;
+        $cursor = $parent;
+    }
+
+    return @ancestors;
+}
+
+sub node_from_doc {
+    my ($doc) = @_;
+    return {
+        pid       => $doc->{pid},
+        type      => $doc->{type},
+        title     => $doc->{title} || $doc->{display_title}{subtitle} || $doc->{pid},
+        url       => programme_url($doc->{pid}),
+        available => undef,
+        sort_key  => broadcast_sort_key($doc),
+        children  => [],
+    };
+}
+
+sub node_from_values {
+    my (%args) = @_;
+    return {
+        pid       => $args{pid},
+        type      => $args{type} || 'episode',
+        title     => $args{title} || $args{pid},
+        url       => $args{url} || programme_url($args{pid}),
+        available => $args{available},
+        sort_key  => $args{sort_key},
+        children  => [],
+    };
+}
+
+sub children_for_path {
+    my ($parent_doc, $child_doc) = @_;
+
+    if ($child_doc->{type} eq 'series' && $parent_doc->{type} eq 'brand') {
+        my $children = fetch_series_children($parent_doc->{pid});
+        return $children if contains_pid($children, $child_doc->{pid});
+        return fetch_peer_chain($child_doc->{pid});
+    }
+
+    if (($child_doc->{type} eq 'episode' || $child_doc->{type} eq 'clip')
+        && ($parent_doc->{type} eq 'brand' || $parent_doc->{type} eq 'series')) {
+        my $children = fetch_episode_guide($parent_doc->{pid});
+        return $children if contains_pid($children, $child_doc->{pid});
+
+        $children = fetch_available_episodes($parent_doc->{pid});
+        return $children if contains_pid($children, $child_doc->{pid});
+        return fetch_peer_chain($child_doc->{pid});
+    }
+
+    return [ node_from_doc($child_doc) ];
+}
+
+sub children_for_requested {
+    my ($doc) = @_;
+
+    if ($doc->{type} eq 'brand') {
+        my $series = fetch_series_children($doc->{pid});
+        return $series if @{$series};
+        return fetch_available_episodes($doc->{pid});
+    }
+
+    if ($doc->{type} eq 'series') {
+        my $guide = fetch_episode_guide($doc->{pid});
+        return $guide if @{$guide};
+        return fetch_available_episodes($doc->{pid});
+    }
+
+    return [];
+}
+
+sub contains_pid {
+    my ($nodes, $pid) = @_;
+    return scalar grep { $_->{pid} eq $pid } @{$nodes};
+}
+
+sub fetch_series_children {
+    my ($brand_pid) = @_;
+
+    my $html = eval { fetch_url("https://www.bbc.co.uk/iplayer/episodes/$brand_pid") };
+    return [] if $@ || !$html;
+
+    my $active_pid = extract_active_series_pid($html, $brand_pid);
+    my $dom = XML::LibXML->load_html(
+        string          => $html,
+        recover         => 1,
+        suppress_errors => 1,
+        suppress_warnings => 1,
+    );
+
+    my @buttons = $dom->findnodes(
+        '//*[contains(@class,"series-nav")]//*[contains(@class,"scrollable-nav__item")]/*[contains(@class,"series-nav__button")]'
+    );
+
+    my @children;
+    my %seen;
+
+    for my $button (@buttons) {
+        my $tag_name = $button->nodeName;
+        my $label = trim($button->findvalue('.//*[contains(@class,"button__text")]'));
+        my $child_pid;
+
+        if ($tag_name eq 'span') {
+            $child_pid = $active_pid;
+        } else {
+            my $href = $button->findvalue('./@href');
+            my ($series_id) = $href =~ /[?&]seriesId=([^&]+)/;
+            $child_pid = extract_last_pid($series_id);
+        }
+
+        next unless $label;
+        next unless $child_pid;
+        next if $child_pid eq $brand_pid;
+        next if $seen{$child_pid}++;
+
+        my $doc = eval { fetch_programme($child_pid) };
+        next if $@;
+        next unless $doc->{type} && $doc->{type} eq 'series';
+
+        push @children, node_from_doc($doc);
+    }
+
+    return \@children;
+}
+
+sub extract_active_series_pid {
+    my ($html, $brand_pid) = @_;
+
+    return unless $html =~ /window\.__IPLAYER_REDUX_STATE__\s*=\s*(.+?);<\/script>/s;
+
+    my $decoded = eval { decode_json($1) };
+    return if $@;
+
+    my $slice_id = $decoded->{page}{seriesPagination}{sliceId} || '';
+    my $pid = extract_last_pid($slice_id);
+
+    return if !$pid || $pid eq $brand_pid;
+    return $pid;
+}
+
+sub extract_last_pid {
+    my ($text) = @_;
+    return unless defined $text;
+
+    my @matches = ($text =~ /(@{[ REGEX_PID ]})/g);
+    return $matches[-1];
+}
+
+sub fetch_available_episodes {
+    my ($parent_pid) = @_;
+    my @episodes;
+    my %seen;
+    my $page = 1;
+    my $max_page = 1;
+
+    while ($page <= $max_page) {
+        my $html = eval { fetch_url("https://www.bbc.co.uk/programmes/$parent_pid/episodes/player?page=$page") };
+        last if $@ || !$html;
+
+        my $dom = XML::LibXML->load_html(
+            string            => $html,
+            recover           => 1,
+            suppress_errors   => 1,
+            suppress_warnings => 1,
+        );
+
+        for my $episode ($dom->findnodes('//*[@data-pid]')) {
+            my $pid = trim($episode->findvalue('@data-pid'));
+            next unless $pid;
+            next if $seen{$pid}++;
+
+            my $subtitle = trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__subtitle ")]/*[1]'));
+            $subtitle ||= trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__subtitle ")]'));
+            my $title = trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__title ")]/*[1]'));
+            $title ||= trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__title ")]'));
+            my $label = $title || $subtitle || $pid;
+
+            push @episodes, node_from_values(
+                pid       => $pid,
+                type      => 'episode',
+                title     => $label,
+                available => 1,
+                sort_key  => pid_sort_key($pid),
+            );
+        }
+
+        my $last_page = trim($dom->findvalue('//*[contains(@class,"pagination__page--last")]//a'));
+        $max_page = $last_page if $last_page =~ /\A\d+\z/ && $last_page > $max_page;
+        $page++;
+    }
+
+    return sort_episode_nodes(\@episodes) if @episodes;
+    return fetch_available_episodes_fallback($parent_pid);
+}
+
+sub fetch_episode_guide {
+    my ($parent_pid) = @_;
+    my @episodes;
+    my %seen;
+    my $page = 1;
+    my $max_page = 1;
+
+    while ($page <= $max_page) {
+        my $html = eval { fetch_url("https://www.bbc.co.uk/programmes/$parent_pid/episodes/guide?page=$page") };
+        last if $@ || !$html;
+
+        my $dom = XML::LibXML->load_html(
+            string            => $html,
+            recover           => 1,
+            suppress_errors   => 1,
+            suppress_warnings => 1,
+        );
+
+        for my $episode ($dom->findnodes('//*[@data-pid]')) {
+            my $pid = trim($episode->findvalue('@data-pid'));
+            next unless $pid;
+            next if $seen{$pid}++;
+
+            my $title = trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__title ")]/*[1]'));
+            $title ||= trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__title ")]'));
+            my $subtitle = trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__subtitle ")]/*[1]'));
+            $subtitle ||= trim($episode->findvalue('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__subtitle ")]'));
+            my $label = $title || $subtitle || $pid;
+            my $available = scalar $episode->findnodes('.//*[contains(concat(" ", normalize-space(@class), " "), " programme__img--available ")]') ? 1 : 0;
+
+            push @episodes, node_from_values(
+                pid       => $pid,
+                type      => 'episode',
+                title     => $label,
+                available => $available,
+                sort_key  => pid_sort_key($pid),
+            );
+        }
+
+        my $last_page = trim($dom->findvalue('//*[contains(@class,"pagination__page--last")]//a'));
+        $max_page = $last_page if $last_page =~ /\A\d+\z/ && $last_page > $max_page;
+        $page++;
+    }
+
+    return sort_episode_nodes(\@episodes);
+}
+
+sub fetch_available_episodes_fallback {
+    my ($parent_pid) = @_;
+    my @queue = ("https://www.bbc.co.uk/iplayer/episodes/$parent_pid");
+    my %queued = ($queue[0] => 1);
+    my %seen;
+    my @episodes;
+
+    while (my $url = shift @queue) {
+        my $html = eval { fetch_url($url) };
+        next if $@ || !$html;
+
+        my $dom = XML::LibXML->load_html(
+            string            => $html,
+            recover           => 1,
+            suppress_errors   => 1,
+            suppress_warnings => 1,
+        );
+
+        for my $href ($dom->findnodes('//*[contains(@class,"series-nav")]//a/@href')) {
+            my $path = trim($href->findvalue('.'));
+            next unless $path;
+            my $absolute = $path =~ m{\Ahttps?://} ? $path : "https://www.bbc.co.uk$path";
+            next if $queued{$absolute}++;
+            push @queue, $absolute;
+        }
+
+        for my $episode ($dom->findnodes('//*[contains(@class,"list__grid")]//*[contains(@class,"grid__item")]')) {
+            my $href = $episode->findvalue('.//a[contains(@class,"content-item-root")]/@href');
+            my ($pid) = $href =~ m{/episode/(@{[ REGEX_PID ]})}i;
+            next unless $pid;
+            next if $seen{$pid}++;
+
+            my $title = trim($episode->findvalue('.//*[contains(@class,"content-item-root__meta--with-label")]'));
+            $title ||= trim($episode->findvalue('.//*[contains(@class,"content-item-root__title")]'));
+            $title ||= $pid;
+
+            push @episodes, node_from_values(
+                pid       => $pid,
+                type      => 'episode',
+                title     => $title,
+                available => 1,
+                sort_key  => pid_sort_key($pid),
+            );
+        }
+    }
+
+    return sort_episode_nodes(\@episodes);
+}
+
+sub fetch_peer_chain {
+    my ($pid) = @_;
+
+    my $requested = fetch_programme($pid);
+    my %available;
+    if (my $parent = $requested->{parent}{programme}) {
+        my $available_nodes = fetch_available_episodes($parent->{pid});
+        %available = map { $_->{pid} => 1 } @{$available_nodes};
+    }
+    my @before;
+    my @after;
+    my %seen = ($pid => 1);
+
+    my $peer = $requested->{peers}{previous};
+    while ($peer && !$seen{$peer->{pid}}++) {
+        my $doc = fetch_programme($peer->{pid});
+        my $node = node_from_doc($doc);
+        $node->{available} = $available{$node->{pid}} ? 1 : 0;
+        unshift @before, $node;
+        $peer = $doc->{peers}{previous};
+    }
+
+    $peer = $requested->{peers}{next};
+    while ($peer && !$seen{$peer->{pid}}++) {
+        my $doc = fetch_programme($peer->{pid});
+        my $node = node_from_doc($doc);
+        $node->{available} = $available{$node->{pid}} ? 1 : 0;
+        push @after, $node;
+        $peer = $doc->{peers}{next};
+    }
+
+    my $requested_node = node_from_doc($requested);
+    $requested_node->{available} = $available{$requested_node->{pid}} ? 1 : 0;
+
+    return sort_episode_nodes([
+        @before,
+        $requested_node,
+        @after,
+    ]);
+}
+
+sub pid_sort_key {
+    my ($pid) = @_;
+    return $page_sort_key_cache{$pid} if exists $page_sort_key_cache{$pid};
+
+    my $html = eval { fetch_url("https://www.bbc.co.uk/programmes/$pid") };
+    return $page_sort_key_cache{$pid} = 0 if $@ || !$html;
+
+    if ($html =~ /"datePublished":"(\d{4}-\d{2}-\d{2})"/) {
+        return $page_sort_key_cache{$pid} = date_sort_key($1);
+    }
+
+    if ($html =~ /<div class="broadcast-event__time beta"[^>]*content="(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2}))"/) {
+        return $page_sort_key_cache{$pid} = datetime_sort_key($1);
+    }
+
+    my $doc = eval { fetch_programme($pid) };
+    return $page_sort_key_cache{$pid} = 0 if $@ || !$doc;
+    return $page_sort_key_cache{$pid} = broadcast_sort_key($doc);
+}
+
+sub broadcast_sort_key {
+    my ($doc) = @_;
+    return 0 unless $doc && $doc->{first_broadcast_date};
+    return datetime_sort_key($doc->{first_broadcast_date});
+}
+
+sub datetime_sort_key {
+    my ($value) = @_;
+
+    my ($year, $month, $day, $hour, $minute, $second, $tz) =
+        $value =~ /\A(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(Z|[+-]\d{2}:\d{2})\z/;
+    return 0 unless defined $tz;
+
+    my $epoch = timegm($second, $minute, $hour, $day, $month - 1, $year - 1900);
+    return $epoch if $tz eq 'Z';
+
+    my ($sign, $tz_hour, $tz_minute) = $tz =~ /\A([+-])(\d{2}):(\d{2})\z/;
+    my $offset = ($tz_hour * 3600) + ($tz_minute * 60);
+    $epoch -= $sign eq '+' ? $offset : -$offset;
+    return $epoch;
+}
+
+sub date_sort_key {
+    my ($value) = @_;
+    my ($year, $month, $day) = $value =~ /\A(\d{4})-(\d{2})-(\d{2})\z/;
+    return 0 unless defined $day;
+    return timegm(0, 0, 0, $day, $month - 1, $year - 1900);
+}
+
+sub sort_episode_nodes {
+    my ($nodes) = @_;
+    my @sorted = sort {
+        ($a->{sort_key} || 0) <=> ($b->{sort_key} || 0)
+            || ($a->{title} || '') cmp ($b->{title} || '')
+            || ($a->{pid} || '') cmp ($b->{pid} || '')
+    } @{$nodes};
+    return \@sorted;
+}
+
+sub render_tree {
+    my ($node, $prefix, $is_last, $is_root, $lines) = @_;
+
+    push @{$lines}, $is_root ? format_node($node) : $prefix.($is_last ? '└── ' : '├── ').format_node($node);
+
+    my $child_prefix = $is_root ? '' : $prefix.($is_last ? '    ' : '│   ');
+    my $children = $node->{children} || [];
+    for my $index (0 .. $#$children) {
+        render_tree(
+            $children->[$index],
+            $child_prefix,
+            $index == $#$children,
+            0,
+            $lines,
+        );
+    }
+}
+
+sub format_node {
+    my ($node) = @_;
+    return sprintf('%s %s', format_pid($node), osc8_link($node->{title}, $node->{url}));
+}
+
+sub format_pid {
+    my ($node) = @_;
+
+    return ansi_green($node->{pid}) if $node->{pid} eq $requested_pid;
+    return ansi_pink($node->{pid}) if ($node->{type} || '') =~ /\A(?:episode|clip)\z/ && ($node->{available} || 0);
+    return ansi_dull_red($node->{pid}) if ($node->{type} || '') =~ /\A(?:episode|clip)\z/ && defined $node->{available} && !$node->{available};
+    return ansi_dark_grey($node->{pid});
+}
+
+sub programme_url {
+    my ($pid) = @_;
+    return "https://www.bbc.co.uk/programmes/$pid";
+}
+
+sub osc8_link {
+    my ($text, $url) = @_;
+    return $text unless $url;
+    return "\e]8;;$url\e\\$text\e]8;;\e\\";
+}
+
+sub ansi_green {
+    my ($text) = @_;
+    return "\e[32m$text\e[0m";
+}
+
+sub ansi_pink {
+    my ($text) = @_;
+    return "\e[95m$text\e[0m";
+}
+
+sub ansi_dull_red {
+    my ($text) = @_;
+    return "\e[31;2m$text\e[0m";
+}
+
+sub ansi_dark_grey {
+    my ($text) = @_;
+    return "\e[90m$text\e[0m";
+}
+
+sub trim {
+    my ($value) = @_;
+    return '' unless defined $value;
+    $value =~ s/\s+/ /g;
+    $value =~ s/^\s+|\s+$//g;
+    return $value;
+}
