@@ -1,0 +1,696 @@
+#!/usr/bin/env perl
+
+use strict;
+use utf8;
+use warnings;
+
+use Getopt::Long ();
+use IO::Handle ();
+use Time::HiRes qw(time);
+use open qw(:std :encoding(UTF-8));
+
+my $debug_enabled = 0;
+my %debug_progress;
+
+# Drive the CLI so parsing, solving, and output formatting happen in one place.
+sub main {
+    my (@argv) = @_;
+
+    my $options = eval { parse_args(@argv) };
+    if (!$options) {
+        return report_usage_error($@);
+    }
+
+    $debug_enabled = $options->{debug} ? 1 : 0;
+    %debug_progress = ();
+    STDERR->autoflush(1) if $debug_enabled;
+    if ($options->{help}) {
+        print STDOUT usage();
+        return 0;
+    }
+
+    my @available = eval { expand_available($options->{available_specs}) };
+    if (!@available && $@) {
+        return report_usage_error($@);
+    }
+
+    my @all_numbers = (
+        $options->{target},
+        $options->{maxvalue},
+        @available,
+    );
+
+    my $scale = scale_for(@all_numbers);
+    my $target = decimal_to_int($options->{target}, $scale);
+    my $maxvalue = decimal_to_int($options->{maxvalue}, $scale);
+    my @available_ints = map { decimal_to_int($_, $scale) } @available;
+
+    debug_log(
+        sprintf(
+            'starting search: target=%s maxstamps=%d maxvalue=%s available=%d',
+            format_decimal($target, $scale),
+            $options->{maxstamps},
+            format_decimal($maxvalue, $scale),
+            scalar(@available_ints),
+        )
+    );
+
+    my $best_collection = find_best_collection(
+        target      => $target,
+        maxstamps   => $options->{maxstamps},
+        max_total   => $maxvalue,
+        available   => \@available_ints,
+    );
+
+    if (!@{$best_collection->{sets}}) {
+        print STDERR "No valid stamp sets found between the target and maximum value.\n";
+        return 1;
+    }
+
+    my @lines = ('found sets');
+    for my $set (@{$best_collection->{sets}}) {
+        my @formatted = map { format_decimal($_, $scale) } $set->{values}->@*;
+        push @lines, '  '.format_decimal($set->{sum}, $scale).' = ['.join(', ', @formatted).']';
+    }
+
+    if (@{$best_collection->{unused_values}}) {
+        push @lines, q{}, 'unused stamps';
+        push @lines, format_unused_lines($best_collection->{unused_values}, $scale);
+    }
+
+    print STDOUT join("\n", @lines)."\n";
+    return 0;
+}
+
+# Report bad user input consistently so failures explain the problem and show usage.
+sub report_usage_error {
+    my ($message) = @_;
+
+    chomp $message;
+    print STDERR $message."\n";
+    print STDERR usage();
+    return 1;
+}
+
+# Parse and validate CLI options early so the solver can assume normalized inputs.
+sub parse_args {
+    my (@argv) = @_;
+
+    my @expanded_argv = expand_available_option_groups(@argv);
+    my %options = (
+        available_specs => [],
+    );
+    my $parser = Getopt::Long::Parser->new(
+        config => [qw(no_auto_abbrev no_ignore_case pass_through)],
+    );
+    my $parser_errors = q{};
+    {
+        open my $err_fh, '>:encoding(UTF-8)', \$parser_errors
+            or die "open getopt stderr scalar: $!";
+        local *STDERR = $err_fh;
+        my $ok = $parser->getoptionsfromarray(
+            \@expanded_argv,
+            'help|h'        => \$options{help},
+            'debug'         => \$options{debug},
+            'target|t=s'    => \$options{target},
+            'maxstamps|s=s' => \$options{maxstamps},
+            'maxvalue|v=s'  => \$options{maxvalue},
+            'available|a=s@' => $options{available_specs},
+        );
+        close $err_fh or die "close getopt stderr scalar: $!";
+        die normalize_getopt_error($parser_errors) if !$ok;
+    }
+
+    die "Unexpected argument: $expanded_argv[0]\n" if @expanded_argv;
+    return \%options if $options{help};
+
+    die "--target is required\n" unless defined $options{target};
+    die "--maxstamps is required\n" unless defined $options{maxstamps};
+    die "--available is required\n" unless @{$options{available_specs}};
+
+    $options{target} = canonical_decimal(
+        validate_decimal($options{target}, '--target')
+    );
+    die "--target must be greater than zero\n"
+        if decimal_is_zero($options{target});
+
+    if (defined $options{maxvalue}) {
+        $options{maxvalue} = canonical_decimal(
+            validate_decimal($options{maxvalue}, '--maxvalue')
+        );
+    } else {
+        $options{maxvalue} = $options{target};
+    }
+
+    my $comparison_scale = scale_for($options{target}, $options{maxvalue});
+    my $target_int = decimal_to_int($options{target}, $comparison_scale);
+    my $maxvalue_int = decimal_to_int($options{maxvalue}, $comparison_scale);
+    die "--maxvalue must be greater than or equal to --target\n"
+        if $maxvalue_int < $target_int;
+
+    validate_int($options{maxstamps}, '--maxstamps');
+    die "--maxstamps must be greater than zero\n"
+        unless $options{maxstamps} > 0;
+
+    return \%options;
+}
+
+# Expand multi-value -a/--available groups so Getopt::Long can parse them one value at a time.
+sub expand_available_option_groups {
+    my (@argv) = @_;
+
+    my @expanded;
+    while (@argv) {
+        my $arg = shift @argv;
+        if ($arg eq '--available' || $arg eq '-a') {
+            die "$arg requires at least one value\n"
+                if !@argv || is_option_token($argv[0]);
+            while (@argv && !is_option_token($argv[0])) {
+                push @expanded, $arg, shift @argv;
+            }
+            next;
+        }
+        push @expanded, $arg;
+    }
+
+    return @expanded;
+}
+
+# Treat leading-dash tokens as option boundaries so value lists do not swallow later flags.
+sub is_option_token {
+    my ($token) = @_;
+
+    return defined $token && $token =~ /\A-/ ? 1 : 0;
+}
+
+# Normalize Getopt::Long failures so user-facing errors keep the script's existing style.
+sub normalize_getopt_error {
+    my ($message) = @_;
+
+    $message =~ s/\s+\z//;
+    $message =~ s/\AOption (\S+) requires an argument\z/$1 requires a value/m;
+    return $message."\n";
+}
+
+# Accept only non-negative decimal syntax so later numeric scaling stays predictable.
+sub validate_decimal {
+    my ($value, $name) = @_;
+
+    die "$name must be a non-negative number\n"
+        unless defined $value && $value =~ /\A(?:\d+(?:\.\d+)?|\.\d+)\z/;
+
+    return $value;
+}
+
+# Accept only positive integers because maxstamps must be a count, not a float.
+sub validate_int {
+    my ($value, $name) = @_;
+
+    die "$name must be a positive integer\n"
+        unless defined $value && $value =~ /\A\d+\z/;
+
+    return $value;
+}
+
+# Canonicalize decimals to a stable string form so comparisons and scaling are consistent.
+sub canonical_decimal {
+    my ($value) = @_;
+
+    my ($whole, $frac) = split /\./, $value, 2;
+    $whole = 0 if !defined $whole || $whole eq q{};
+    $whole =~ s/^0+(?=\d)//;
+    $whole = 0 if $whole eq q{};
+
+    if (defined $frac) {
+        $frac =~ s/0+\z//;
+        return length($frac) ? "$whole.$frac" : "$whole";
+    }
+
+    return "$whole";
+}
+
+# Detect numeric zero after canonicalization so zero-valued stamps can be rejected safely.
+sub decimal_is_zero {
+    my ($value) = @_;
+    return canonical_decimal($value) eq '0';
+}
+
+# Expand repeated stamp specs into individual values because the search works per stamp.
+sub expand_available {
+    my ($specs) = @_;
+
+    my @expanded;
+    for my $spec (@{$specs}) {
+        my ($value, $count);
+        if ($spec =~ /\A(.+?)[xX](\d+)\z/) {
+            ($value, $count) = ($1, $2);
+        } else {
+            ($value, $count) = ($spec, 1);
+        }
+
+        $value = canonical_decimal(validate_decimal($value, '--available'));
+        die "--available values must be greater than zero\n" if decimal_is_zero($value);
+        die "--available multiplicity must be greater than zero\n" if $count < 1;
+
+        push @expanded, ($value) x $count;
+    }
+
+    return @expanded;
+}
+
+# Find the needed decimal precision so all values can be converted to exact integers.
+sub scale_for {
+    my (@values) = @_;
+
+    my $max = 0;
+    for my $value (@values) {
+        my ($whole, $frac) = split /\./, $value, 2;
+        my $length = defined $frac ? length($frac) : 0;
+        $max = $length if $length > $max;
+    }
+
+    return $max;
+}
+
+# Convert a decimal string to a scaled integer to avoid floating-point drift in search.
+sub decimal_to_int {
+    my ($value, $scale) = @_;
+
+    my ($whole, $frac) = split /\./, $value, 2;
+    $frac ||= q{};
+    $frac .= '0' x ($scale - length($frac));
+    $frac = 0 if $frac eq q{};
+
+    return ($whole * (10 ** $scale)) + $frac;
+}
+
+# Format scaled integers back to two decimals so output is stable and user-friendly.
+sub format_decimal {
+    my ($value, $scale) = @_;
+
+    my $factor = 10 ** $scale;
+    my $hundredths = int((($value * 100) + int($factor / 2)) / $factor);
+    my $whole = int($hundredths / 100);
+    my $frac = $hundredths % 100;
+
+    return sprintf('%d.%02d', $whole, $frac);
+}
+
+# Emit debug messages only when requested so normal CLI output stays clean.
+sub debug_log {
+    my ($message) = @_;
+
+    return unless $debug_enabled;
+    print STDERR "[debug] $message\n";
+}
+
+# Throttle noisy progress logging so long searches stay observable without flooding stderr.
+sub debug_tick {
+    my ($name, $count, $message) = @_;
+
+    return unless $debug_enabled;
+
+    my $now = time;
+    my $state = $debug_progress{$name} ||= {
+        last_count => 0,
+        last_time  => $now,
+    };
+
+    return
+        if $count < 1_000
+        || ($count - $state->{last_count}) < 100_000
+        || ($now - $state->{last_time}) < 1;
+
+    $state->{last_count} = $count;
+    $state->{last_time} = $now;
+    debug_log($message);
+}
+
+# Resolve per-phase timeout settings so expensive searches can stop with partial results.
+sub phase_timeout_seconds {
+    my ($phase) = @_;
+
+    my $specific = $ENV{"STAMP_OPTIMIZER_\U${phase}\E_TIMEOUT_SECONDS"};
+    my $shared = $ENV{STAMP_OPTIMIZER_PHASE_TIMEOUT_SECONDS};
+    my $value = defined $specific ? $specific : $shared;
+
+    return 60 unless defined $value && length $value;
+    die "Invalid timeout for $phase phase\n"
+        unless $value =~ /\A(?:\d+(?:\.\d+)?|\.\d+)\z/;
+
+    return 0 + $value;
+}
+
+# Convert a timeout duration into an absolute deadline so checks stay cheap in recursion.
+sub phase_deadline {
+    my ($phase) = @_;
+    return time + phase_timeout_seconds($phase);
+}
+
+# Test deadlines in one helper so both search phases handle timeouts the same way.
+sub phase_timed_out {
+    my ($deadline) = @_;
+    return time >= $deadline;
+}
+
+# Build the finite stamp pool and run both search phases to get the best overall collection.
+sub find_best_collection {
+    my (%args) = @_;
+
+    my $target = $args{target};
+    my $maxstamps = $args{maxstamps};
+    my $max_total = $args{max_total};
+    my @available = @{$args{available}};
+    my @stamps = map { { id => $_, value => $available[$_] } } 0 .. $#available;
+    @stamps = sort {
+        $a->{value} <=> $b->{value}
+            ||
+        $a->{id} <=> $b->{id}
+    } @stamps;
+
+    my $candidate_sets = find_candidate_sets(
+        stamps    => \@stamps,
+        target    => $target,
+        max_total => $max_total,
+        maxstamps => $maxstamps,
+    );
+
+    debug_log(sprintf('searching non-overlapping collections across %d candidate sets', scalar(@{$candidate_sets})));
+    my $deadline = phase_deadline('collection');
+    my $result = search_collection(
+        stamps         => \@stamps,
+        candidate_sets => $candidate_sets,
+        deadline       => $deadline,
+    );
+
+    debug_log(
+        sprintf(
+            'collection search %s: visited %d states; best collection uses %d sets',
+            $result->{timed_out} ? 'timed out' : 'complete',
+            $result->{states_visited},
+            $result->{best}{count},
+        )
+    );
+
+    return $result->{best};
+}
+
+# Explore combinations of non-overlapping candidates because maximizing set count is global.
+sub search_collection {
+    my (%args) = @_;
+
+    my $stamps = $args{stamps};
+    my $candidate_sets = $args{candidate_sets};
+    my $deadline = $args{deadline};
+    my $best = collection_result($stamps, {}, [], 0);
+
+    if (@{$candidate_sets}) {
+        my $seed = $candidate_sets->[0];
+        my %seed_used = map { $_ => 1 } grep { defined } @{$seed->{ids}};
+        $best = collection_result($stamps, \%seed_used, [$seed], $seed->{sum});
+    }
+
+    my $states_visited = 0;
+    my $timed_out = 0;
+    my $search;
+    $search = sub {
+        my ($start, $used_ids, $chosen, $total_sum) = @_;
+
+        if (phase_timed_out($deadline)) {
+            $timed_out = 1;
+            return;
+        }
+
+        $states_visited++;
+        debug_tick(
+            collection_search => $states_visited,
+            sprintf(
+                'collection search: visited %d states; current best uses %d sets',
+                $states_visited,
+                $best->{count},
+            )
+        );
+
+        my $current = collection_result($stamps, $used_ids, $chosen, $total_sum);
+        if (compare_collections($current, $best) < 0) {
+            $best = $current;
+            debug_log(
+                sprintf(
+                    'new best collection: %d sets totalling %s',
+                    $best->{count},
+                    format_decimal($best->{total_sum}, 2),
+                )
+            );
+        }
+
+        for (my $i = $start; $i < @{$candidate_sets}; $i++) {
+            last if $timed_out;
+            my $candidate = $candidate_sets->[$i];
+            next if candidate_overlaps($candidate, $used_ids);
+
+            my %next_used = %{$used_ids};
+            $next_used{$_} = 1 for grep { defined } @{$candidate->{ids}};
+
+            push @{$chosen}, $candidate;
+            $search->($i + 1, \%next_used, $chosen, $total_sum + $candidate->{sum});
+            pop @{$chosen};
+        }
+    };
+
+    for my $root_index (0 .. $#{$candidate_sets}) {
+        last if $timed_out;
+        my $candidate = $candidate_sets->[$root_index];
+        my %used_ids = map { $_ => 1 } grep { defined } @{$candidate->{ids}};
+        my @chosen = ($candidate);
+        $search->($root_index + 1, \%used_ids, \@chosen, $candidate->{sum});
+    }
+
+    return {
+        best           => $best,
+        states_visited => $states_visited,
+        timed_out      => $timed_out,
+    };
+}
+
+# Order individual sets deterministically so output and tie-breaking stay stable.
+sub compare_sets {
+    my ($left, $right) = @_;
+
+    my $sum_cmp = set_sum($left) <=> set_sum($right);
+    return $sum_cmp if $sum_cmp;
+
+    my $limit = @{$left} < @{$right} ? @{$left} : @{$right};
+    for my $index (0 .. $limit - 1) {
+        my $cmp = $right->[$index] <=> $left->[$index];
+        return $cmp if $cmp;
+    }
+
+    return @{$left} <=> @{$right};
+}
+
+# Sum a set's members because many ranking decisions compare totals directly.
+sub set_sum {
+    my ($values) = @_;
+
+    my $sum = 0;
+    $sum += $_ for @{$values};
+    return $sum;
+}
+
+# Generate admissible sets up front so the harder packing step works on a bounded candidate list.
+sub find_candidate_sets {
+    my (%args) = @_;
+
+    my @stamps = @{$args{stamps}};
+    my $target = $args{target};
+    my $max_total = $args{max_total};
+    my $maxstamps = $args{maxstamps};
+    my @candidates;
+
+    my $search;
+    my $candidate_count = 0;
+    my $deadline = phase_deadline('candidate');
+    my $timed_out = 0;
+    debug_log('generating candidate sets');
+    $search = sub {
+        my ($start, $sum, $chosen_values, $chosen_ids) = @_;
+
+        if ($sum >= $target) {
+            my @values = sort { $b <=> $a } @{$chosen_values};
+            if (distinct_value_count(\@values) > 1) {
+                $candidate_count++;
+                debug_tick(
+                    candidate_generation => $candidate_count,
+                    sprintf('candidate generation: found %d candidate sets so far', $candidate_count),
+                );
+                push @candidates, {
+                    ids    => [ grep { defined } @{$chosen_ids} ],
+                    values => \@values,
+                    sum    => $sum,
+                };
+            }
+            return;
+        }
+
+        if (phase_timed_out($deadline)) {
+            $timed_out = 1;
+            return;
+        }
+
+        return if @{$chosen_values} >= $maxstamps;
+
+        for (my $i = $start; $i < @stamps; $i++) {
+            last if $timed_out;
+            my $next_sum = $sum + $stamps[$i]{value};
+            last if $next_sum > $max_total;
+
+            push @{$chosen_values}, $stamps[$i]{value};
+            push @{$chosen_ids}, $stamps[$i]{id};
+            $search->($i + 1, $next_sum, $chosen_values, $chosen_ids);
+            pop @{$chosen_values};
+            pop @{$chosen_ids};
+        }
+    };
+
+    $search->(0, 0, [], []);
+    debug_log(
+        sprintf(
+            'candidate generation %s: %d sets',
+            $timed_out ? 'timed out' : 'complete',
+            $candidate_count,
+        )
+    );
+
+    return [
+        sort {
+            compare_sets($a->{values}, $b->{values})
+                ||
+            compare_ids($a->{ids}, $b->{ids})
+        } @candidates
+    ];
+}
+
+# Reject overlapping candidates quickly so the collection search never reuses a stamp.
+sub candidate_overlaps {
+    my ($candidate, $used_ids) = @_;
+
+    for my $id (@{$candidate->{ids}}) {
+        next if !defined $id;
+        return 1 if $used_ids->{$id};
+    }
+
+    return 0;
+}
+
+# Snapshot a partial solution so comparisons can rank complete and in-progress collections.
+sub collection_result {
+    my ($stamps, $used_ids, $chosen, $total_sum) = @_;
+
+    my @sets = sort {
+        compare_sets($a->{values}, $b->{values})
+            ||
+        compare_ids($a->{ids}, $b->{ids})
+    } @{$chosen};
+
+    my @unused_values = sort { $a <=> $b } map { $_->{value} }
+        grep { !$used_ids->{$_->{id}} } @{$stamps};
+
+    return {
+        count         => scalar(@sets),
+        total_sum     => $total_sum,
+        sets          => \@sets,
+        unused_ids    => [ sort { $a <=> $b } grep { defined && length } keys %{$used_ids} ],
+        unused_values => \@unused_values,
+    };
+}
+
+# Rank collections by set count first, then closeness, so search can keep the best-so-far result.
+sub compare_collections {
+    my ($left, $right) = @_;
+
+    my $count_cmp = $right->{count} <=> $left->{count};
+    return $count_cmp if $count_cmp;
+
+    my $sum_cmp = $left->{total_sum} <=> $right->{total_sum};
+    return $sum_cmp if $sum_cmp;
+
+    my $set_cmp = compare_set_lists($left->{sets}, $right->{sets});
+    return $set_cmp if $set_cmp;
+
+    return compare_ids($left->{unused_ids}, $right->{unused_ids});
+}
+
+# Compare ordered lists of sets so ties between collections break reproducibly.
+sub compare_set_lists {
+    my ($left, $right) = @_;
+
+    my $limit = @{$left} < @{$right} ? @{$left} : @{$right};
+    for my $index (0 .. $limit - 1) {
+        my $cmp = compare_sets($left->[$index]{values}, $right->[$index]{values});
+        return $cmp if $cmp;
+    }
+
+    return @{$left} <=> @{$right};
+}
+
+# Compare ID lists deterministically so otherwise equal candidates still sort predictably.
+sub compare_ids {
+    my ($left, $right) = @_;
+
+    my $limit = @{$left} < @{$right} ? @{$left} : @{$right};
+    for my $index (0 .. $limit - 1) {
+        my $cmp = $left->[$index] <=> $right->[$index];
+        return $cmp if $cmp;
+    }
+
+    return @{$left} <=> @{$right};
+}
+
+# Count distinct values so single-value candidates can be discarded per the CLI rules.
+sub distinct_value_count {
+    my ($values) = @_;
+
+    my %seen;
+    $seen{$_} = 1 for @{$values};
+    return scalar(keys %seen);
+}
+
+# Lay out unused stamps in fixed-width columns so long leftovers remain readable.
+sub format_unused_lines {
+    my ($values, $scale) = @_;
+
+    my @lines;
+    for (my $start = 0; $start < @{$values}; $start += 10) {
+        my $end = $start + 9;
+        $end = @{$values} - 1 if $end > @{$values} - 1;
+        my @chunk = @{$values}[$start .. $end];
+        my @formatted = map { sprintf('%5s', format_decimal($_, $scale)) } @chunk;
+        push @lines, '  '.join('   ', @formatted);
+    }
+
+    return @lines;
+}
+
+# Return the user-facing help text so both --help and argument errors show one canonical message.
+sub usage {
+    return <<'EOF';
+Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] --available <float(?:xint)?> [...]
+
+Find the largest possible collection of stamp sets whose totals are at or above
+the target without exceeding maxvalue. Each available stamp is used at most
+once across the returned collection; ties are broken by overall closeness to
+the target. Candidate sets that use only one distinct stamp value are
+discarded.
+
+Options:
+  -t, --target           target total to meet or exceed
+  -s, --maxstamps        maximum number of stamps allowed in any returned set
+  -v, --maxvalue         maximum allowed total for any returned set; defaults
+                         to the target
+  -a, --available        one or more available stamp values; repeats are allowed,
+                         and Nx notation such as 3.2x3 means three 3.2 stamps
+  -h, --help             print this help text
+EOF
+}
+
+exit(main(@ARGV)) unless caller;
