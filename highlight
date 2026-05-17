@@ -3,8 +3,6 @@
 use strict;
 use warnings;
 
-use String::Tagged::Terminal;
-
 my @colour_names = qw(
     black red green yellow blue purple cyan
     lightgrey darkgrey salmon lightgreen lightyellow
@@ -30,6 +28,12 @@ while(my $arg = $ARGV[0]) {
     $arg =~ /^--/                 ? die("$arg: invalid argument\n".usage()) :
                                     push_re($arg, \@highlights, \@ARGV);
 }
+
+# postpone this until after parsing args, as things like show_completions
+# don't need it but might be run during shell startup, before perlbrew has
+# had a chance to pick the right perl
+eval 'use String::Tagged::Terminal;';
+if($@) { die($@); }
 
 die("You need to tell me what to highlight\n".usage())
     unless(@highlights);
