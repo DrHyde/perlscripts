@@ -68,7 +68,8 @@ sub run_script_with_env {
 }
 
 sub usage_prefix {
-    return 'Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] --available <float(?:xint)?> [...]';
+    return "Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \\\n".
+           "         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...]";
 }
 
 subtest '--help prints usage' => sub {
@@ -133,6 +134,45 @@ subtest 'argument errors print the error and then usage on stderr' => sub {
         $unexpected->{stderr},
         qr/\AUnexpected argument: --bogus\n\Q@{[ usage_prefix() ]}\E\n/s,
         'unexpected argument prints error followed by usage',
+    );
+};
+
+subtest 'max repeat value works' => sub {
+    my $result = run_script(
+        '--target', '5',
+        '--available', '2', '2', '1', '4', '1', '3', '2',
+        '--maxstamps', '3',
+        '--maxrepeatvalue', '1',
+    );
+
+    assert_success($result, 'exact match run');
+    is(
+        $result->{stdout},
+        "found sets\n".
+        "  5.00 = [4.00, 1.00]\n".
+        "  5.00 = [3.00, 2.00]\n".
+        "\n".
+        "unused stamps\n".
+        "   1.00    2.00    2.00\n",
+        "omits candidates that would repeat a value that's too high"
+    );
+};
+
+subtest '... and so does having no max repeat value' => sub {
+    my $result = run_script(
+        '--target', '5',
+        '--available', '2', '2', '1', '4', '1', '3', '2',
+        '--maxstamps', '3',
+    );
+
+    assert_success($result, 'exact match run');
+    is(
+        $result->{stdout},
+        "found sets\n".
+        "  5.00 = [4.00, 1.00]\n".
+        "  5.00 = [3.00, 2.00]\n".
+        "  5.00 = [2.00, 2.00, 1.00]\n",
+        "doesn't omit them if no max repeat value is specified"
     );
 };
 

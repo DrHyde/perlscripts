@@ -37,12 +37,14 @@ sub main {
     my @all_numbers = (
         $options->{target},
         $options->{maxvalue},
+        $options->{maxrepeatvalue},
         @available,
     );
 
     my $scale = scale_for(@all_numbers);
     my $target = decimal_to_int($options->{target}, $scale);
     my $maxvalue = decimal_to_int($options->{maxvalue}, $scale);
+    my $maxrepeatvalue = decimal_to_int($options->{maxrepeatvalue}, $scale);
     my @available_ints = map { decimal_to_int($_, $scale) } @available;
 
     debug_log(
@@ -56,10 +58,11 @@ sub main {
     );
 
     my $best_collection = find_best_collection(
-        target      => $target,
-        maxstamps   => $options->{maxstamps},
-        max_total   => $maxvalue,
-        available   => \@available_ints,
+        target         => $target,
+        maxstamps      => $options->{maxstamps},
+        max_total      => $maxvalue,
+        max_repeatable => $maxrepeatvalue,
+        available      => \@available_ints,
     );
 
     if (!@{$best_collection->{sets}}) {
@@ -110,12 +113,13 @@ sub parse_args {
         local *STDERR = $err_fh;
         my $ok = $parser->getoptionsfromarray(
             \@expanded_argv,
-            'help|h'        => \$options{help},
-            'debug'         => \$options{debug},
-            'target|t=s'    => \$options{target},
-            'maxstamps|s=s' => \$options{maxstamps},
-            'maxvalue|v=s'  => \$options{maxvalue},
-            'available|a=s@' => $options{available_specs},
+            'help|h'             => \$options{help},
+            'debug'              => \$options{debug},
+            'target|t=s'         => \$options{target},
+            'maxstamps|s=s'      => \$options{maxstamps},
+            'maxvalue|v=s'       => \$options{maxvalue},
+            'maxrepeatvalue|r=s' => \$options{maxrepeatvalue},
+            'available|a=s@'     => $options{available_specs},
         );
         close $err_fh or die "close getopt stderr scalar: $!";
         die normalize_getopt_error($parser_errors) if !$ok;
@@ -140,6 +144,14 @@ sub parse_args {
         );
     } else {
         $options{maxvalue} = $options{target};
+    }
+
+    if (defined $options{maxrepeatvalue}) {
+        $options{maxrepeatvalue} = canonical_decimal(
+            validate_decimal($options{maxrepeatvalue}, '--maxrepeatvalue')
+        );
+    } else {
+        $options{maxrepeatvalue} = $options{maxvalue} + 1;
     }
 
     my $comparison_scale = scale_for($options{target}, $options{maxvalue});
@@ -360,6 +372,7 @@ sub find_best_collection {
     my $target = $args{target};
     my $maxstamps = $args{maxstamps};
     my $max_total = $args{max_total};
+    my $max_repeatable = $args{max_repeatable};
     my @available = @{$args{available}};
     my @stamps = map { { id => $_, value => $available[$_] } } 0 .. $#available;
     @stamps = sort {
@@ -369,10 +382,11 @@ sub find_best_collection {
     } @stamps;
 
     my $candidate_sets = find_candidate_sets(
-        stamps    => \@stamps,
-        target    => $target,
-        max_total => $max_total,
-        maxstamps => $maxstamps,
+        stamps         => \@stamps,
+        target         => $target,
+        max_total      => $max_total,
+        max_repeatable => $max_repeatable,
+        maxstamps      => $maxstamps,
     );
 
     debug_log(sprintf('searching non-overlapping collections across %d candidate sets', scalar(@{$candidate_sets})));
@@ -504,6 +518,7 @@ sub find_candidate_sets {
     my @stamps = @{$args{stamps}};
     my $target = $args{target};
     my $max_total = $args{max_total};
+    my $max_repeatable = $args{max_repeatable};
     my $maxstamps = $args{maxstamps};
     my @candidates;
 
@@ -517,6 +532,16 @@ sub find_candidate_sets {
 
         if ($sum >= $target) {
             my @values = sort { $b <=> $a } @{$chosen_values};
+
+            my %count_by_value;
+            foreach my $value (@values) { $count_by_value{$value}++ }
+            return if(
+                grep {
+                    $_ > $max_repeatable &&
+                    $count_by_value{$_} > 1
+                } keys %count_by_value
+            );
+
             if (distinct_value_count(\@values) > 1) {
                 $candidate_count++;
                 debug_tick(
@@ -674,7 +699,8 @@ sub format_unused_lines {
 # Return the user-facing help text so both --help and argument errors show one canonical message.
 sub usage {
     return <<'EOF';
-Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] --available <float(?:xint)?> [...]
+Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \
+         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...]
 
 Find the largest possible collection of stamp sets whose totals are at or above
 the target without exceeding maxvalue. Each available stamp is used at most
@@ -687,8 +713,10 @@ Options:
   -s, --maxstamps        maximum number of stamps allowed in any returned set
   -v, --maxvalue         maximum allowed total for any returned set; defaults
                          to the target
+  -r, --maxrepeatvalue   the maximum value stamp which can be repeated in a set;
+                         defaults to no such value
   -a, --available        one or more available stamp values; repeats are allowed,
-                         and Nx notation such as 3.2x3 means three 3.2 stamps
+                         and NxM notation such as 3.2x3 means three 3.2 stamps
   -h, --help             print this help text
 EOF
 }
