@@ -69,7 +69,8 @@ sub run_script_with_env {
 
 sub usage_prefix {
     return "Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \\\n".
-           "         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...]";
+           "         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \\\n".
+           "         [--outputs sets|unused]\n";
 }
 
 subtest '--help prints usage' => sub {
@@ -86,6 +87,7 @@ subtest '--help prints usage' => sub {
     like($result->{stdout}, qr/^\s+-a,\s+--available\b/m, 'documents -a');
     like($result->{stdout}, qr/^\s+-s,\s+--maxstamps\b/m, 'documents -s');
     like($result->{stdout}, qr/^\s+-v,\s+--maxvalue\b/m, 'documents -v');
+    like($result->{stdout}, qr/^\s+-o,\s+--outputs\b/m, 'documents -o');
     like($result->{stdout}, qr/^\s+-h,\s+--help\b/m, 'documents -h');
     unlike($result->{stdout}, qr/--debug/, 'does not document the hidden debug flag');
 };
@@ -117,7 +119,6 @@ subtest '--debug enables debug logging without affecting normal output' => sub {
 
 subtest 'argument errors print the error and then usage on stderr' => sub {
     my $missing_target = run_script('--maxstamps', '2', '--available', '2', '3');
-
     is($missing_target->{exit}, 1, 'missing target exits non-zero');
     is($missing_target->{stdout}, '', 'missing target prints no stdout');
     like(
@@ -126,14 +127,55 @@ subtest 'argument errors print the error and then usage on stderr' => sub {
         'missing target prints error followed by usage',
     );
 
-    my $unexpected = run_script('--bogus');
+    my $bogus_output = run_script(qw(--outputs sets unused lemons));
+    is($bogus_output->{exit}, 1, 'bogus output exits non-zero');
+    is($bogus_output->{stdout}, '', 'bogus output prints no stdout');
+    like(
+        $bogus_output->{stderr},
+        qr/\A--outputs can only contain 'sets' and\/or 'unused'\n\Q@{[ usage_prefix() ]}\E\n/s,
+        'bogus output prints error followed by usage'
+    );
 
+    my $unexpected = run_script('--bogus');
     is($unexpected->{exit}, 1, 'unexpected argument exits non-zero');
     is($unexpected->{stdout}, '', 'unexpected argument prints no stdout');
     like(
         $unexpected->{stderr},
         qr/\AUnexpected argument: --bogus\n\Q@{[ usage_prefix() ]}\E\n/s,
         'unexpected argument prints error followed by usage',
+    );
+};
+
+subtest 'output format (sets only) works' => sub {
+    my $result = run_script(
+        '--target', '5',
+        '--available', '6', '4', '1', '3', '2',
+        '--maxstamps', '3',
+        '-o', 'sets'
+    );
+
+    assert_success($result, 'exact match run');
+    is(
+        $result->{stdout},
+        "  5.00 = [4.00, 1.00]\n".
+        "  5.00 = [3.00, 2.00]\n",
+        "only emits sets"
+    );
+};
+
+subtest 'output format (unused only) works' => sub {
+    my $result = run_script(
+        '--target', '5',
+        '--available', '6', '4', '1', '3', '2',
+        '--maxstamps', '3',
+        '--outputs', 'unused'
+    );
+
+    assert_success($result, 'exact match run');
+    is(
+        $result->{stdout},
+        "  6.00x1  \n",
+        "only emits unused stamps"
     );
 };
 
@@ -153,7 +195,7 @@ subtest 'max repeat value works' => sub {
         "  5.00 = [3.00, 2.00]\n".
         "\n".
         "unused stamps\n".
-        "   1.00    2.00    2.00\n",
+        "  1.00x1    2.00x2  \n",
         "omits candidates that would repeat a value that's too high"
     );
 };
@@ -191,7 +233,7 @@ subtest 'single-value-only candidates are discarded' => sub {
         "  5.00 = [3.00, 2.00]\n".
         "\n".
         "unused stamps\n".
-        "   5.00\n",
+        "  5.00x1  \n",
         'omits candidates that use only one distinct stamp value',
     );
 };
@@ -212,7 +254,7 @@ subtest 'maximises the number of non-overlapping sets, then total closeness' => 
         "  7.00 = [4.00, 3.00]\n".
         "\n".
         "unused stamps\n".
-        "   3.00\n",
+        "  3.00x1  \n",
         'chooses the largest collection of non-overlapping sets and then the closest one',
     );
 };
@@ -233,7 +275,7 @@ subtest '--available accepts multiplicity notation and repeated option groups' =
         "  6.50 = [3.30, 3.20]\n".
         "\n".
         "unused stamps\n".
-        "   3.20\n",
+        "  3.20x1  \n",
         'expands multiplicity notation and repeated --available groups',
     );
 };
@@ -290,7 +332,7 @@ subtest 'reported regression prefers the best two non-overlapping sets' => sub {
         "  3.65 = [2.55, 0.91, 0.19]\n".
         "\n".
         "unused stamps\n".
-        "   0.92    0.93\n",
+        "  0.92x1    0.93x1  \n",
         'uses each available stamp at most once across the chosen collection',
     );
 };
@@ -311,8 +353,8 @@ subtest 'unused stamps are sorted and emitted in right-aligned columns with up t
         "  10.00 = [9.89, 0.11]\n".
         "\n".
         "unused stamps\n".
-        "   0.01    0.02    0.03    0.04    0.05    0.06    0.07    0.08    0.09    0.10\n".
-        "  34.21\n",
+        "  0.01x1    0.02x1    0.03x1    0.04x1    0.05x1    0.06x1    0.07x1    0.08x1  \n".
+        "  0.09x1    0.10x1   34.21x1  \n",
         'formats sorted unused stamps into ten-wide rows with aligned columns',
     );
 };
@@ -335,7 +377,7 @@ subtest 'candidate generation timeout returns whatever candidate sets were found
         "  5.00 = [4.00, 1.00]\n".
         "\n".
         "unused stamps\n".
-        "   5.00\n",
+        "  5.00x1  \n",
         'uses the partial candidate list when candidate generation times out immediately',
     );
 };
@@ -359,7 +401,7 @@ subtest 'collection search timeout returns the best collection found so far' => 
         "  3.63 = [2.55, 0.90, 0.18]\n".
         "\n".
         "unused stamps\n".
-        "   0.19    0.91    0.92    0.93    2.55\n",
+        "  0.19x1    0.91x1    0.92x1    0.93x1    2.55x1  \n",
         'returns the seeded best-so-far collection when collection search times out immediately',
     );
 };

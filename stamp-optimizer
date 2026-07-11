@@ -70,15 +70,21 @@ sub main {
         return 1;
     }
 
-    my @lines = ('found sets');
-    for my $set (@{$best_collection->{sets}}) {
-        my @formatted = map { format_decimal($_, $scale) } $set->{values}->@*;
-        push @lines, '  '.format_decimal($set->{sum}, $scale).' = ['.join(', ', @formatted).']';
+    my @lines = ();
+
+    if(grep { $_ eq 'sets' } @{$options->{outputs}}) {
+        push @lines, 'found sets' if(@{$options->{outputs}} != 1);
+        for my $set (@{$best_collection->{sets}}) {
+            my @formatted = map { format_decimal($_, $scale) } $set->{values}->@*;
+            push @lines, '  '.format_decimal($set->{sum}, $scale).' = ['.join(', ', @formatted).']';
+        }
     }
 
-    if (@{$best_collection->{unused_values}}) {
-        push @lines, q{}, 'unused stamps';
-        push @lines, format_unused_lines($best_collection->{unused_values}, $scale);
+    if(grep { $_ eq 'unused' } @{$options->{outputs}}) {
+        if (@{$best_collection->{unused_values}}) {
+            push @lines, q{}, 'unused stamps' if(@{$options->{outputs}} != 1);
+            push @lines, format_unused_lines($best_collection->{unused_values}, $scale);
+        }
     }
 
     print STDOUT join("\n", @lines)."\n";
@@ -102,6 +108,7 @@ sub parse_args {
     my @expanded_argv = expand_available_option_groups(@argv);
     my %options = (
         available_specs => [],
+        outputs         => [],
     );
     my $parser = Getopt::Long::Parser->new(
         config => [qw(no_auto_abbrev no_ignore_case pass_through)],
@@ -120,14 +127,19 @@ sub parse_args {
             'maxvalue|v=s'       => \$options{maxvalue},
             'maxrepeatvalue|r=s' => \$options{maxrepeatvalue},
             'available|a=s@'     => $options{available_specs},
+            'outputs|o=s@'       => $options{outputs},
         );
         close $err_fh or die "close getopt stderr scalar: $!";
         die normalize_getopt_error($parser_errors) if !$ok;
     }
 
+    $options{outputs} = [qw(sets unused)] unless(@{$options{outputs}});
+
     die "Unexpected argument: $expanded_argv[0]\n" if @expanded_argv;
     return \%options if $options{help};
 
+    die "--outputs can only contain 'sets' and/or 'unused'\n"
+        if(grep { $_ !~ /^(sets|unused)$/ } @{$options{outputs}});
     die "--target is required\n" unless defined $options{target};
     die "--maxstamps is required\n" unless defined $options{maxstamps};
     die "--available is required\n" unless @{$options{available_specs}};
@@ -167,14 +179,15 @@ sub parse_args {
     return \%options;
 }
 
-# Expand multi-value -a/--available groups so Getopt::Long can parse them one value at a time.
+# Expand multi-value -a/--available/-o/-outputs groups so Getopt::Long can parse
+# them one value at a time.
 sub expand_available_option_groups {
     my (@argv) = @_;
 
     my @expanded;
     while (@argv) {
         my $arg = shift @argv;
-        if ($arg eq '--available' || $arg eq '-a') {
+        if($arg =~ /^(-a|-o|--available|--outputs)$/) {
             die "$arg requires at least one value\n"
                 if !@argv || is_option_token($argv[0]);
             while (@argv && !is_option_token($argv[0])) {
@@ -684,13 +697,25 @@ sub distinct_value_count {
 sub format_unused_lines {
     my ($values, $scale) = @_;
 
-    my @lines;
-    for (my $start = 0; $start < @{$values}; $start += 10) {
-        my $end = $start + 9;
-        $end = @{$values} - 1 if $end > @{$values} - 1;
-        my @chunk = @{$values}[$start .. $end];
-        my @formatted = map { sprintf('%5s', format_decimal($_, $scale)) } @chunk;
-        push @lines, '  '.join('   ', @formatted);
+    return () unless(@{$values});
+    my @lines = ('');
+
+    my $prev_value = -1;
+    my $this_value_count = 0;
+    my $this_line_length = 0;
+    foreach my $this_value (@{$values}, -1) {
+        if($this_value != $prev_value) {
+            if($prev_value != -1) {
+                $lines[-1] .= sprintf('%8s  ', format_decimal($prev_value, $scale).'x'.$this_value_count);
+            }
+            $this_value_count = 1;
+            $prev_value = $this_value;
+        } else {
+            $this_value_count++;
+        }
+        if(length($lines[-1]) > 72) {
+            push @lines, '';
+        }
     }
 
     return @lines;
@@ -700,7 +725,8 @@ sub format_unused_lines {
 sub usage {
     return <<'EOF';
 Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \
-         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...]
+         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \
+         [--outputs sets|unused]
 
 Find the largest possible collection of stamp sets whose totals are at or above
 the target without exceeding maxvalue. Each available stamp is used at most
@@ -717,6 +743,8 @@ Options:
                          defaults to no such value
   -a, --available        one or more available stamp values; repeats are allowed,
                          and NxM notation such as 3.2x3 means three 3.2 stamps
+  -o, --outputs          one or more of 'sets' and/or 'unused', to limit which
+                         sections of the output are emitted. Defaults to both.
   -h, --help             print this help text
 EOF
 }
