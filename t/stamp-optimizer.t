@@ -70,7 +70,7 @@ sub run_script_with_env {
 sub usage_prefix {
     return "Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \\\n".
            "         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \\\n".
-           "         [--outputs sets|unused]\n";
+           "         [--mandatory <float>] [--outputs sets|unused]\n";
 }
 
 subtest '--help prints usage' => sub {
@@ -88,6 +88,7 @@ subtest '--help prints usage' => sub {
     like($result->{stdout}, qr/^\s+-s,\s+--maxstamps\b/m, 'documents -s');
     like($result->{stdout}, qr/^\s+-v,\s+--maxvalue\b/m, 'documents -v');
     like($result->{stdout}, qr/^\s+-o,\s+--outputs\b/m, 'documents -o');
+    like($result->{stdout}, qr/^\s+-m,\s+--mandatory\b/m, 'documents -m');
     like($result->{stdout}, qr/^\s+-h,\s+--help\b/m, 'documents -h');
     unlike($result->{stdout}, qr/--debug/, 'does not document the hidden debug flag');
 };
@@ -177,6 +178,27 @@ subtest 'output format (unused only) works' => sub {
         "  6.00x1  \n",
         "only emits unused stamps"
     );
+};
+
+subtest 'mandatory value works' => sub {
+    foreach my $arg (qw(--mandatory -m)) {
+        my $result = run_script(
+            '--target', '5',
+            '--available', '2', '1', '4', '3',
+            '--maxstamps', '2',
+            $arg, '1',
+        );
+        assert_success($result, 'exact match run');
+        is(
+            $result->{stdout},
+            "found sets\n".
+            "  5.00 = [4.00, 1.00]\n".
+            "\n".
+            "unused stamps\n".
+            "  2.00x1    3.00x1  \n",
+            "omits candidates that don't include a mandatory value (using $arg)"
+        );
+    }
 };
 
 subtest 'max repeat value works' => sub {

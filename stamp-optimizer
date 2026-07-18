@@ -43,6 +43,7 @@ sub main {
 
     my $scale = scale_for(@all_numbers);
     my $target = decimal_to_int($options->{target}, $scale);
+    my $mandatory = decimal_to_int($options->{mandatory} // 0, $scale);
     my $maxvalue = decimal_to_int($options->{maxvalue}, $scale);
     my $maxrepeatvalue = decimal_to_int($options->{maxrepeatvalue}, $scale);
     my @available_ints = map { decimal_to_int($_, $scale) } @available;
@@ -60,6 +61,7 @@ sub main {
     my $best_collection = find_best_collection(
         target         => $target,
         maxstamps      => $options->{maxstamps},
+        mandatory      => $mandatory,
         max_total      => $maxvalue,
         max_repeatable => $maxrepeatvalue,
         available      => \@available_ints,
@@ -126,6 +128,7 @@ sub parse_args {
             'maxstamps|s=s'      => \$options{maxstamps},
             'maxvalue|v=s'       => \$options{maxvalue},
             'maxrepeatvalue|r=s' => \$options{maxrepeatvalue},
+            'mandatory|m=s'      => \$options{mandatory},
             'available|a=s@'     => $options{available_specs},
             'outputs|o=s@'       => $options{outputs},
         );
@@ -383,6 +386,7 @@ sub find_best_collection {
     my (%args) = @_;
 
     my $target = $args{target};
+    my $mandatory = $args{mandatory};
     my $maxstamps = $args{maxstamps};
     my $max_total = $args{max_total};
     my $max_repeatable = $args{max_repeatable};
@@ -397,6 +401,7 @@ sub find_best_collection {
     my $candidate_sets = find_candidate_sets(
         stamps         => \@stamps,
         target         => $target,
+        mandatory      => $mandatory,
         max_total      => $max_total,
         max_repeatable => $max_repeatable,
         maxstamps      => $maxstamps,
@@ -530,6 +535,7 @@ sub find_candidate_sets {
 
     my @stamps = @{$args{stamps}};
     my $target = $args{target};
+    my $mandatory = $args{mandatory};
     my $max_total = $args{max_total};
     my $max_repeatable = $args{max_repeatable};
     my $maxstamps = $args{maxstamps};
@@ -555,7 +561,8 @@ sub find_candidate_sets {
                 } keys %count_by_value
             );
 
-            if (distinct_value_count(\@values) > 1) {
+            return if($mandatory && !grep { $_ eq $mandatory } @values);
+            if ( distinct_value_count(\@values) > 1 ) {
                 $candidate_count++;
                 debug_tick(
                     candidate_generation => $candidate_count,
@@ -726,7 +733,7 @@ sub usage {
     return <<'EOF';
 Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \
          [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \
-         [--outputs sets|unused]
+         [--mandatory <float>] [--outputs sets|unused]
 
 Find the largest possible collection of stamp sets whose totals are at or above
 the target without exceeding maxvalue. Each available stamp is used at most
@@ -743,6 +750,7 @@ Options:
                          defaults to no such value
   -a, --available        one or more available stamp values; repeats are allowed,
                          and NxM notation such as 3.2x3 means three 3.2 stamps
+  -m, --mandatory        a value which must be present in a set for it to be valid
   -o, --outputs          one or more of 'sets' and/or 'unused', to limit which
                          sections of the output are emitted. Defaults to both.
   -h, --help             print this help text
