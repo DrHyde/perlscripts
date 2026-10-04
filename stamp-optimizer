@@ -369,18 +369,6 @@ sub phase_timeout_seconds {
     return 0 + $value;
 }
 
-# Convert a timeout duration into an absolute deadline so checks stay cheap in recursion.
-sub phase_deadline {
-    my ($phase) = @_;
-    return time + phase_timeout_seconds($phase);
-}
-
-# Test deadlines in one helper so both search phases handle timeouts the same way.
-sub phase_timed_out {
-    my ($deadline) = @_;
-    return time >= $deadline;
-}
-
 # Build the finite stamp pool and run both search phases to get the best overall collection.
 sub find_best_collection {
     my (%args) = @_;
@@ -408,11 +396,9 @@ sub find_best_collection {
     );
 
     debug_log(sprintf('searching non-overlapping collections across %d candidate sets', scalar(@{$candidate_sets})));
-    my $deadline = phase_deadline('collection');
     my $result = search_collection(
         stamps         => \@stamps,
         candidate_sets => $candidate_sets,
-        deadline       => $deadline,
     );
 
     debug_log(
@@ -431,9 +417,12 @@ sub find_best_collection {
 sub search_collection {
     my (%args) = @_;
 
+    my $timed_out = 0;
+    $SIG{ALRM} = sub { alarm(0); $timed_out++ };
+    alarm(phase_timeout_seconds('collection'));
+
     my $stamps = $args{stamps};
     my $candidate_sets = $args{candidate_sets};
-    my $deadline = $args{deadline};
     my $best = collection_result($stamps, {}, [], 0);
 
     if (@{$candidate_sets}) {
@@ -443,15 +432,11 @@ sub search_collection {
     }
 
     my $states_visited = 0;
-    my $timed_out = 0;
     my $search;
     $search = sub {
         my ($start, $used_ids, $chosen, $total_sum) = @_;
 
-        if (phase_timed_out($deadline)) {
-            $timed_out = 1;
-            return;
-        }
+        return if($timed_out);
 
         $states_visited++;
         debug_tick(
@@ -543,16 +528,21 @@ sub find_candidate_sets {
 
     my $search;
     my $candidate_count = 0;
-    my $deadline = phase_deadline('candidate');
+
     my $timed_out = 0;
+    $SIG{ALRM} = sub { alarm(0); $timed_out++ };
+    alarm(phase_timeout_seconds('candidate'));
+
     debug_log('generating candidate sets');
     $search = sub {
         my ($start, $sum, $chosen_values, $chosen_ids) = @_;
 
+        return if($timed_out);
+
         if ($sum >= $target) {
             my @values = sort { $b <=> $a } @{$chosen_values};
-
             my %count_by_value;
+
             foreach my $value (@values) { $count_by_value{$value}++ }
             return if(
                 grep {
@@ -574,11 +564,6 @@ sub find_candidate_sets {
                     sum    => $sum,
                 };
             }
-            return;
-        }
-
-        if (phase_timed_out($deadline)) {
-            $timed_out = 1;
             return;
         }
 
