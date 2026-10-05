@@ -59,12 +59,14 @@ sub main {
     );
 
     my $best_collection = find_best_collection(
-        target         => $target,
-        maxstamps      => $options->{maxstamps},
-        mandatory      => $mandatory,
-        max_total      => $maxvalue,
-        max_repeatable => $maxrepeatvalue,
-        available      => \@available_ints,
+        target             => $target,
+        maxstamps          => $options->{maxstamps},
+        mandatory          => $mandatory,
+        max_total          => $maxvalue,
+        max_repeatable     => $maxrepeatvalue,
+        available          => \@available_ints,
+        timeout_candidates => $options->{timeout_candidates} || $options->{default_timeout},
+        timeout_solver     => $options->{timeout_solver} || $options->{default_timeout},
     );
 
     if (!@{$best_collection->{sets}}) {
@@ -109,8 +111,11 @@ sub parse_args {
 
     my @expanded_argv = expand_available_option_groups(@argv);
     my %options = (
-        available_specs => [],
-        outputs         => [],
+        available_specs    => [],
+        outputs            => [],
+        default_timeout    => $ENV{STAMP_OPTIMIZER_PHASE_TIMEOUT_SECONDS} || 60,
+        timeout_candidates => $ENV{"STAMP_OPTIMIZER_CANDIDATE_TIMEOUT_SECONDS"} || 0,
+        timeout_solver     => $ENV{"STAMP_OPTIMIZER_COLLECTION_TIMEOUT_SECONDS"} || 0,
     );
     my $parser = Getopt::Long::Parser->new(
         config => [qw(no_auto_abbrev no_ignore_case pass_through)],
@@ -129,6 +134,9 @@ sub parse_args {
             'maxvalue|v=s'       => \$options{maxvalue},
             'maxrepeatvalue|r=s' => \$options{maxrepeatvalue},
             'mandatory|m=s'      => \$options{mandatory},
+            'timeout=i'          => \$options{default_timeout},
+            'timeout1=i'         => \$options{timeout_candidates},
+            'timeout2=i'         => \$options{timeout_solver},
             'available|a=s@'     => $options{available_specs},
             'outputs|o=s@'       => $options{outputs},
         );
@@ -179,6 +187,8 @@ sub parse_args {
     die "--maxstamps must be greater than zero\n"
         unless $options{maxstamps} > 0;
 
+    # use Data::Dumper::Concise;
+    # die Dumper(\%options);
     return \%options;
 }
 
@@ -329,7 +339,7 @@ sub debug_log {
     my ($message) = @_;
 
     return unless $debug_enabled;
-    print STDERR "[debug] $message\n";
+    print STDERR join(': ', '[debug]', ''.localtime(), $message)."\n";
 }
 
 # Throttle noisy progress logging so long searches stay observable without flooding stderr.
@@ -352,21 +362,6 @@ sub debug_tick {
     $state->{last_count} = $count;
     $state->{last_time} = $now;
     debug_log($message);
-}
-
-# Resolve per-phase timeout settings so expensive searches can stop with partial results.
-sub phase_timeout_seconds {
-    my ($phase) = @_;
-
-    my $specific = $ENV{"STAMP_OPTIMIZER_\U${phase}\E_TIMEOUT_SECONDS"};
-    my $shared = $ENV{STAMP_OPTIMIZER_PHASE_TIMEOUT_SECONDS};
-    my $value = defined $specific ? $specific : $shared;
-
-    return 60 unless defined $value && length $value;
-    die "Invalid timeout for $phase phase\n"
-        unless $value =~ /\A(?:\d+(?:\.\d+)?|\.\d+)\z/;
-
-    return 0 + $value;
 }
 
 # Build the finite stamp pool and run both search phases to get the best overall collection.
@@ -393,12 +388,14 @@ sub find_best_collection {
         max_total      => $max_total,
         max_repeatable => $max_repeatable,
         maxstamps      => $maxstamps,
+        timeout        => $args{timeout_candidates},
     );
 
     debug_log(sprintf('searching non-overlapping collections across %d candidate sets', scalar(@{$candidate_sets})));
     my $result = search_collection(
         stamps         => \@stamps,
         candidate_sets => $candidate_sets,
+        timeout        => $args{timeout_solver},
     );
 
     debug_log(
@@ -419,7 +416,7 @@ sub search_collection {
 
     my $timed_out = 0;
     $SIG{ALRM} = sub { alarm(0); $timed_out++ };
-    alarm(phase_timeout_seconds('collection'));
+    alarm($args{timeout});
 
     my $stamps = $args{stamps};
     my $candidate_sets = $args{candidate_sets};
@@ -531,7 +528,7 @@ sub find_candidate_sets {
 
     my $timed_out = 0;
     $SIG{ALRM} = sub { alarm(0); $timed_out++ };
-    alarm(phase_timeout_seconds('candidate'));
+    alarm($args{timeout});
 
     debug_log('generating candidate sets');
     $search = sub {
@@ -718,7 +715,9 @@ sub usage {
     return <<'EOF';
 Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \
          [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \
-         [--mandatory <float>] [--outputs sets|unused]
+         [--mandatory <float>] [--outputs sets|unused] \
+         [--timeout1 <int>] [--timeout2 <int>] \
+         [--debug]
 
 Find the largest possible collection of stamp sets whose totals are at or above
 the target without exceeding maxvalue. Each available stamp is used at most
@@ -739,6 +738,19 @@ Options:
   -o, --outputs          one or more of 'sets' and/or 'unused', to limit which
                          sections of the output are emitted. Defaults to both.
   -h, --help             print this help text
+
+  There are two phases to operation. The first generates a list of candidate sets,
+  the second finds the best subset of those sets. For any non-trivial number of
+  stamps the first phase can take a long time, and the second can take an effectively
+  infinite time if we don't restrict it. Therefore ...
+
+  --timeout1    Maximum time in seconds for phase 1, defaults to 60s
+  --timeout2    Maximum time in seconds for phase 2, defaults to 60s
+  --timeout     Maximum time in seconds for both phases, defaults to 60s each
+
+  You may find --debug useful to see progress and perhaps tweak the timeouts. When
+  you have hundreds of available stamps you should probably increase timeout1.
+
 EOF
 }
 
