@@ -70,7 +70,9 @@ sub run_script_with_env {
 sub usage_prefix {
     return "Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \\\n".
            "         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \\\n".
-           "         [--mandatory <float>] [--outputs sets|unused]\n";
+           "         [--mandatory <float>] [--outputs sets|unused] \\\n".
+           "         [--timeout1 <int>] [--timeout2 <int>] \\\n".
+           "         [--debug]\n";
 }
 
 subtest '--help prints usage' => sub {
@@ -90,7 +92,6 @@ subtest '--help prints usage' => sub {
     like($result->{stdout}, qr/^\s+-o,\s+--outputs\b/m, 'documents -o');
     like($result->{stdout}, qr/^\s+-m,\s+--mandatory\b/m, 'documents -m');
     like($result->{stdout}, qr/^\s+-h,\s+--help\b/m, 'documents -h');
-    unlike($result->{stdout}, qr/--debug/, 'does not document the hidden debug flag');
 };
 
 subtest '-h prints usage' => sub {
@@ -115,7 +116,7 @@ subtest '--debug enables debug logging without affecting normal output' => sub {
         "  5.00 = [3.00, 2.00]\n",
         '--debug preserves the normal stdout format',
     );
-    like($result->{stderr}, qr/\A\[debug\] starting search:/, '--debug emits progress to stderr');
+    like($result->{stderr}, qr/\A\[debug\]:/, '--debug emits progress to stderr');
 };
 
 subtest 'argument errors print the error and then usage on stderr' => sub {
@@ -421,9 +422,10 @@ subtest 'collection search timeout returns the best collection found so far' => 
         $result->{stdout},
         "found sets\n".
         "  3.63 = [2.55, 0.90, 0.18]\n".
+        "  3.65 = [2.55, 0.91, 0.19]\n".
         "\n".
         "unused stamps\n".
-        "  0.19x1    0.91x1    0.92x1    0.93x1    2.55x1  \n",
+        "  0.92x1    0.93x1  \n",
         'returns the seeded best-so-far collection when collection search times out immediately',
     );
 };
