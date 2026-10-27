@@ -60,18 +60,12 @@ sub assert_success {
     is($result->{stderr}, '', "$name prints no stderr");
 }
 
-sub run_script_with_env {
-    my ($env, @args) = @_;
-
-    local %ENV = (%ENV, %{$env});
-    return run_script(@args);
-}
 
 sub usage_prefix {
     return "Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \\\n".
            "         [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \\\n".
            "         [--mandatory <float>] [--outputs sets|unused] \\\n".
-           "         [--timeout1 <int>] [--timeout2 <int>] \\\n".
+           "         [--timeout1 <float>] [--timeout2 <float>] \\\n".
            "         [--debug]\n";
 }
 
@@ -383,11 +377,9 @@ subtest 'unused stamps are sorted and emitted in right-aligned columns with up t
 };
 
 subtest 'candidate generation timeout returns whatever candidate sets were found so far' => sub {
-    my $result = run_script_with_env(
-        {
-            STAMP_OPTIMIZER_CANDIDATE_TIMEOUT_SECONDS  => 0.001,
-            STAMP_OPTIMIZER_COLLECTION_TIMEOUT_SECONDS => 60,
-        },
+    my $result = run_script(
+        '--timeout1', '0.001',
+        '--timeout2', '60',
         '--target', '5',
         '--available', '5', '4', '1',
         '--maxstamps', '2',
@@ -406,11 +398,9 @@ subtest 'candidate generation timeout returns whatever candidate sets were found
 };
 
 subtest 'collection search timeout returns the best collection found so far' => sub {
-    my $result = run_script_with_env(
-        {
-            STAMP_OPTIMIZER_CANDIDATE_TIMEOUT_SECONDS  => 60,
-            STAMP_OPTIMIZER_COLLECTION_TIMEOUT_SECONDS => 0,
-        },
+    my $result = run_script(
+        '--timeout1', '60',
+        '--timeout2', '0',
         '--target', '3.6',
         '--maxstamps', '3',
         '--available', '2.55x2', '0.19', '0.93', '0.18', '0.91', '0.92', '0.90',

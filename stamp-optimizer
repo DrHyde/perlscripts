@@ -113,9 +113,9 @@ sub parse_args {
     my %options = (
         available_specs    => [],
         outputs            => [],
-        default_timeout    => $ENV{STAMP_OPTIMIZER_PHASE_TIMEOUT_SECONDS} || 60,
-        timeout_candidates => $ENV{"STAMP_OPTIMIZER_CANDIDATE_TIMEOUT_SECONDS"} || 0,
-        timeout_solver     => $ENV{"STAMP_OPTIMIZER_COLLECTION_TIMEOUT_SECONDS"} || 0,
+        default_timeout    => 60,
+        timeout_candidates => 0,
+        timeout_solver     => 0,
     );
     my $parser = Getopt::Long::Parser->new(
         config => [qw(no_auto_abbrev no_ignore_case pass_through)],
@@ -135,8 +135,8 @@ sub parse_args {
             'maxrepeatvalue|r=s' => \$options{maxrepeatvalue},
             'mandatory|m=s'      => \$options{mandatory},
             'timeout=i'          => \$options{default_timeout},
-            'timeout1=i'         => \$options{timeout_candidates},
-            'timeout2=i'         => \$options{timeout_solver},
+            'timeout1=s'         => \$options{timeout_candidates},
+            'timeout2=s'         => \$options{timeout_solver},
             'available|a=s@'     => $options{available_specs},
             'outputs|o=s@'       => $options{outputs},
         );
@@ -716,7 +716,7 @@ sub usage {
 Usage: stamp-optimizer --target <float> --maxstamps <int> [--maxvalue <float>] \
          [--maxrepeatvalue <float>] --available <float(?:xint)?> [...] \
          [--mandatory <float>] [--outputs sets|unused] \
-         [--timeout1 <int>] [--timeout2 <int>] \
+         [--timeout1 <float>] [--timeout2 <float>] \
          [--debug]
 
 Find the largest possible collection of stamp sets whose totals are at or above
