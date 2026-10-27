@@ -96,7 +96,7 @@ subtest '--help prints CLI usage' => sub {
     my $result = run_script('--help');
 
     is($result->{exit}, 0, 'help exits successfully');
-    like($result->{stdout}, qr/\AUsage: iplayer-tree \[--debug\] \[--clear-cache\] <pid-or-bbc-url>\n/m, 'prints usage line');
+    like($result->{stdout}, qr/\AUsage: iplayer-tree \[--debug\] \[--clear-cache\] \[--parent-pid\] <pid-or-bbc-url>\n/m, 'prints usage line');
     like($result->{stdout}, qr/requested PID: green/, 'documents requested-pid colour');
     like($result->{stdout}, qr/available episode PIDs: pink/, 'documents available-episode colour');
     like($result->{stdout}, qr/unavailable episode PIDs: dull red/, 'documents unavailable-episode colour');
@@ -111,6 +111,24 @@ subtest 'invalid pid fails at the CLI' => sub {
     is($result->{exit}, 255, 'invalid pid exits non-zero');
     like($result->{stderr}, qr/\AInvalid PID: not-a-pid\n\z/, 'reports invalid pid on stderr');
     is($result->{stdout}, '', 'prints no stdout for invalid pid');
+};
+
+subtest '--parent-pid outputs parent PID when one exists' => sub {
+    my $cache_dir = fresh_cache_copy();
+    my $result = run_script('--cache-dir', $cache_dir, '--parent-pid', 'm002w9yv');
+
+    is($result->{exit}, 0, 'parent-pid run exits successfully');
+    is($result->{stdout}, "m002twwx\n", 'outputs the parent PID');
+    is($result->{stderr}, '', 'prints no stderr');
+};
+
+subtest '--parent-pid outputs nothing when no parent exists' => sub {
+    my $cache_dir = fresh_cache_copy();
+    my $result = run_script('--cache-dir', $cache_dir, '--parent-pid', 'p02jbmrc');
+
+    is($result->{exit}, 0, 'parent-pid run with no parent exits successfully');
+    is($result->{stdout}, "", 'outputs nothing when no parent exists');
+    is($result->{stderr}, '', 'prints no stderr');
 };
 
 subtest 'fixture-backed outputs remain stable' => sub {

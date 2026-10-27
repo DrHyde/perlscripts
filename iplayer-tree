@@ -38,6 +38,7 @@ sub main {
     my %opts = (
         debug       => 0,
         clear_cache => 0,
+        parent_pid  => 0,
     );
 
     while (defined(my $next = shift @argv)) {
@@ -57,6 +58,10 @@ sub main {
             my $value = shift @argv;
             die "--cache-dir requires a directory path\n" unless defined $value && length $value;
             $opts{cache_dir} = $value;
+            next;
+        }
+        if ($next eq '--parent-pid') {
+            $opts{parent_pid} = 1;
             next;
         }
         die "Unexpected argument: $next\n" if defined $opts{arg};
@@ -99,6 +104,16 @@ sub main {
 
     init_cache();
 
+    if ($opts{parent_pid}) {
+        my $requested_doc = eval { fetch_programme($requested_pid) };
+        if ($@) {
+            die "Failed to fetch programme: $@\n";
+        }
+        my @ancestors = ancestry_docs($requested_doc);
+        print STDOUT $ancestors[-1]{pid} . "\n" if @ancestors;
+        return 0;
+    }
+
     my $tree = build_tree($requested_pid);
 
     my @lines;
@@ -109,12 +124,14 @@ sub main {
 
 sub usage {
     return <<'EOF';
-Usage: iplayer-tree [--debug] [--clear-cache] <pid-or-bbc-url>
+Usage: iplayer-tree [--debug] [--clear-cache] [--parent-pid] <pid-or-bbc-url>
 
 Display a BBC iPlayer programme tree, showing:
   * the enclosing brand/series path
   * siblings of the requested PID
   * immediate children of the requested PID
+
+With --parent-pid, output only the parent PID (or nothing if no parent).
 
 Colours:
   * requested PID: green
@@ -128,6 +145,7 @@ URL fetches are cached in /tmp/iplayer-tree-cache for one hour.
 Options:
   --debug         print fetched URLs as they are requested
   --clear-cache   delete all cached URL contents and exit
+  --parent-pid    output only the parent PID of the requested programme
 EOF
 }
 
